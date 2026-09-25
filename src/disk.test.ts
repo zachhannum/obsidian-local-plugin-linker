@@ -61,6 +61,11 @@ describe("readPluginId", () => {
 		expect(() => readPluginId(source)).toThrow("manifest.json is missing an id.");
 	});
 
+	it.each(["..", ".", "../outside", "a/b", "a\\b"])("fails when the id is not a folder name: %s", (id) => {
+		fs.writeFileSync(path.join(source, "manifest.json"), JSON.stringify({ id }));
+		expect(() => readPluginId(source)).toThrow(`The id "${id}" in manifest.json is not a folder name.`);
+	});
+
 	it("fails when the manifest is not JSON", () => {
 		fs.writeFileSync(path.join(source, "manifest.json"), "{");
 		expect(() => readPluginId(source)).toThrow(SyntaxError);
