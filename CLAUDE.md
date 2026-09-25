@@ -44,9 +44,10 @@ quick fix waits for its own PR.
 
 ## Testing
 
-- There is no test suite yet. Code that never touches Obsidian, like
-  `brat.ts`, is the first candidate for one, colocated as
-  `<name>.test.ts`.
+- `npm test` runs Vitest. A test sits beside its code as
+  `<name>.test.ts` and covers only code that never imports `obsidian`,
+  like `brat.ts`. CI runs the build and the tests on each PR and on
+  each push to `main`.
 - A change is tested by hand in a vault that symlinks this repo into
   `.obsidian/plugins/local-plugin-linker`. The linker cannot reload
   itself: turn it off and on in Community plugins after a build.
@@ -68,7 +69,8 @@ quick fix waits for its own PR.
 ## PRs and commits
 
 - One change per branch: `feat/<slug>`, `fix/<slug>`, `chore/<slug>`.
-- `npm run build` (type check, then bundle) is green before a push.
+- `npm run build` (type check, then bundle) and `npm test` are green
+  before a push.
 - PR and issue bodies are unwrapped: one line per paragraph and per
   list item.
 - **Claude does not merge.** A human reviews and merges every PR.
