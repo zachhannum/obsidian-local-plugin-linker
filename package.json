@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-local-plugin-linker",
+  "name": "local-plugin-linker",
   "version": "0.1.0",
   "private": true,
   "scripts": {
