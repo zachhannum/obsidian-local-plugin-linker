@@ -11,7 +11,8 @@ quick fix waits for its own PR.
   dev` watches.
 - `src/main.ts` holds the plugin, the link lifecycle and the settings
   tab. `src/brat.ts` finds a BRAT install for a link and never touches
-  Obsidian. `src/folder-suggest.ts` suggests folders on disk.
+  Obsidian. `src/disk.ts` does the disk work of a link and never
+  touches Obsidian. `src/folder-suggest.ts` suggests folders on disk.
 - Obsidian's private plugin manager is reached through the one
   `PluginManager` interface in `main.ts`. A new private call is added
   there, so the whole private surface stays in one place.
@@ -46,8 +47,9 @@ quick fix waits for its own PR.
 
 - `npm test` runs Vitest. A test sits beside its code as
   `<name>.test.ts` and covers only code that never imports `obsidian`,
-  like `brat.ts`. CI runs the build and the tests on each PR and on
-  each push to `main`.
+  like `brat.ts`. Logic that a test must reach goes in such a file.
+  `npm test` fails below 90% coverage of those files. CI runs the
+  build and the tests on each PR and on each push to `main`.
 - A change is tested by hand in a vault that symlinks this repo into
   `.obsidian/plugins/local-plugin-linker`. The linker cannot reload
   itself: turn it off and on in Community plugins after a build.

@@ -102,6 +102,26 @@ describe("findBratInstall", () => {
 		expect(findBratInstall(pluginsDir, "orca", source)?.repo).toBe("someone/whale-tools");
 	});
 
+	it("returns null when BRAT has no plugin list", () => {
+		writeBrat({});
+		expect(findBratInstall(pluginsDir, "orca", source)).toBeNull();
+	});
+
+	it("reads the remote of a linked git folder without a commondir", () => {
+		writeBrat({ pluginList: ["someone/whale-tools"] });
+		const gitDir = path.join(root, "gitdir");
+		fs.mkdirSync(gitDir);
+		fs.writeFileSync(path.join(gitDir, "config"), gitConfig("https://github.com/someone/whale-tools.git"));
+		fs.writeFileSync(path.join(source, ".git"), "gitdir: ../gitdir\n");
+		expect(findBratInstall(pluginsDir, "orca", source)?.repo).toBe("someone/whale-tools");
+	});
+
+	it("ignores a .git file without a gitdir line", () => {
+		writeBrat({ pluginList: ["someone/whale-tools"] });
+		fs.writeFileSync(path.join(source, ".git"), "nonsense\n");
+		expect(findBratInstall(pluginsDir, "orca", source)).toBeNull();
+	});
+
 	it("reports updates at startup", () => {
 		writeBrat({ pluginList: ["someone/orca"], updateAtStartup: true });
 		expect(findBratInstall(pluginsDir, "orca", source)?.updatesAtStartup).toBe(true);

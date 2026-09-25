@@ -2,7 +2,8 @@ import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } fro
 import * as fs from "fs";
 import * as path from "path";
 import { BratInstall, findBratInstall } from "./brat";
-import { FolderSuggest, expandHome } from "./folder-suggest";
+import { expandHome, linkIn, linkOut, readPluginId } from "./disk";
+import { FolderSuggest } from "./folder-suggest";
 
 /** The slice of Obsidian's private plugin manager this plugin calls. It is not in the public typings. */
 interface PluginManager {
@@ -126,10 +127,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	async add(input: string) {
 		const source = path.resolve(expandHome(input.trim()));
-		const manifestPath = path.join(source, "manifest.json");
-		if (!fs.existsSync(manifestPath)) throw new Error(`Not a plugin folder: manifest.json not found in ${source}`);
-		const id: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8")).id;
-		if (typeof id !== "string" || id === "") throw new Error("manifest.json is missing an id.");
+		const id = readPluginId(source);
 		if (id === this.manifest.id) throw new Error("Local Plugin Linker cannot link itself.");
 
 		const old = this.settings.links.find((l) => l.id === id);
@@ -153,21 +151,8 @@ export default class LocalPluginLinker extends Plugin {
 		this.unwatch(link.id);
 		if (wasOn) await this.plugins.disablePlugin(link.id);
 		try {
-			if (on) {
-				const existing = lstatOrNull(target);
-				if (existing?.isSymbolicLink()) fs.unlinkSync(target);
-				else if (existing) {
-					if (fs.existsSync(stash)) throw new Error(`Cannot turn on the link. A saved version of ${link.id} already exists in ${stash}.`);
-					fs.mkdirSync(path.dirname(stash), { recursive: true });
-					fs.renameSync(target, stash);
-				}
-				fs.mkdirSync(path.dirname(target), { recursive: true });
-				// A junction needs no admin rights on Windows. Other systems ignore the type.
-				fs.symlinkSync(link.source, target, "junction");
-			} else {
-				if (lstatOrNull(target)?.isSymbolicLink()) fs.unlinkSync(target);
-				if (fs.existsSync(stash) && !fs.existsSync(target)) fs.renameSync(stash, target);
-			}
+			if (on) linkIn(link.id, link.source, target, stash);
+			else linkOut(target, stash);
 			link.enabled = on;
 			await this.save();
 		} finally {
@@ -242,14 +227,6 @@ export default class LocalPluginLinker extends Plugin {
 
 	unwatchAll() {
 		for (const id of [...this.watchers.keys()]) this.unwatch(id);
-	}
-}
-
-function lstatOrNull(p: string): fs.Stats | null {
-	try {
-		return fs.lstatSync(p);
-	} catch {
-		return null;
 	}
 }
 
