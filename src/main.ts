@@ -180,7 +180,7 @@ export default class LocalPluginLinker extends Plugin {
 		const brat = this.brat(link);
 		const name = this.displayName(link.id);
 		if (!on) new Notice(`Switched ${name} to the installed version.`);
-		else if (brat?.updatesAtStartup && !this.settings.bratPaused) {
+		else if (brat?.updatesAtStartup && this.plugins.enabledPlugins.has(BRAT_ID)) {
 			new Notice(`Switched ${name} to the linked folder. ${UPDATE_WARNING}`, 10000);
 		} else new Notice(`Switched ${name} to the linked folder.`);
 	}
@@ -253,7 +253,7 @@ function lstatOrNull(p: string): fs.Stats | null {
 	}
 }
 
-function describe(link: Link, brat: BratInstall | null, paused: boolean): DocumentFragment {
+function describe(link: Link, brat: BratInstall | null, paused: boolean, bratOn: boolean): DocumentFragment {
 	const frag = createFragment();
 	frag.createDiv({ text: link.source });
 	if (!brat) return frag;
@@ -264,7 +264,7 @@ function describe(link: Link, brat: BratInstall | null, paused: boolean): Docume
 	frag.createDiv({ text: "Overrides the version installed by BRAT." });
 	if (paused) {
 		frag.createDiv({ text: "BRAT is turned off while this link is on." });
-	} else if (brat.updatesAtStartup) {
+	} else if (bratOn && brat.updatesAtStartup) {
 		frag.createDiv({ text: UPDATE_WARNING, cls: "mod-warning" });
 	}
 	return frag;
@@ -331,7 +331,13 @@ class LinkerSettingTab extends PluginSettingTab {
 		for (const link of this.plugin.settings.links) {
 			const row = new Setting(containerEl)
 				.setName(this.plugin.plugins.manifests[link.id]?.name ?? link.id)
-				.setDesc(describe(link, this.plugin.brat(link), this.plugin.settings.bratPaused))
+				.setDesc(describe(
+						link,
+						this.plugin.brat(link),
+						this.plugin.settings.bratPaused,
+						this.plugin.plugins.enabledPlugins.has(BRAT_ID),
+					),
+				)
 				.addToggle((t) =>
 					t
 						.setTooltip("Use linked folder")
