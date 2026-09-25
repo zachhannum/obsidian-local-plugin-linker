@@ -5,5 +5,6 @@
   "minAppVersion": "1.5.0",
   "description": "Link plugin folders on disk into the vault, and reload the plugins when they rebuild.",
   "author": "Zach Hannum",
-  "isDesktopOnly": true
+  "isDesktopOnly": true,
+  "authorUrl": "https://github.com/zachhannum"
 }

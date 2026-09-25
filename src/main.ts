@@ -292,7 +292,7 @@ class LinkerSettingTab extends PluginSettingTab {
 			.setDesc("Replaces the installed version until you turn off the link.")
 			.addText((text) => {
 				text.setPlaceholder("~/git/my-plugin").onChange((v) => (input = v));
-				text.inputEl.style.width = "22em";
+				text.inputEl.addClass("local-plugin-linker-path");
 				new FolderSuggest(this.app, text.inputEl);
 			})
 			.addButton((button) =>
