@@ -10,7 +10,7 @@ export function expandHome(p: string): string {
 export function readPluginId(folder: string): string {
 	const manifestPath = path.join(folder, "manifest.json");
 	if (!fs.existsSync(manifestPath)) throw new Error(`Not a plugin folder: manifest.json not found in ${folder}`);
-	const id: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8")).id;
+	const { id } = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { id?: unknown };
 	if (typeof id !== "string" || id === "") throw new Error("manifest.json is missing an id.");
 	return id;
 }
