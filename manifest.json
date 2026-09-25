@@ -1,0 +1,9 @@
+{
+  "id": "local-plugin-linker",
+  "name": "Local Plugin Linker",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Link plugin folders on disk into the vault, and reload the plugins when they rebuild.",
+  "author": "Zach Hannum",
+  "isDesktopOnly": true
+}
