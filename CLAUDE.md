@@ -54,10 +54,16 @@ quick fix waits for its own PR.
 
 ## Releases
 
-- `npm version patch|minor|major` bumps `package.json`, `manifest.json`
-  and `versions.json` together and tags without a `v` prefix. `git push
-  --follow-tags` runs the release workflow, which attaches `main.js`,
-  `manifest.json` and `styles.css` to a GitHub release.
+- A release starts from the "Cut a release" workflow in the Actions
+  tab. It runs `npm version`, which bumps `package.json`,
+  `manifest.json` and `versions.json` together and tags without a `v`
+  prefix. It pushes the commit to `main` and then the tag as the
+  release app, because main's ruleset lets only that app push. The app
+  token comes from the `RELEASE_APP_ID` variable and the
+  `RELEASE_APP_PRIVATE_KEY` secret.
+- The tag runs `release.yml`. It refuses a tag that does not match
+  `manifest.json` and `package.json`, then builds, tests and attaches
+  `main.js`, `manifest.json` and `styles.css` to a GitHub release.
 - The plugin id and name never contain "obsidian", and the manifest
   description never says "Obsidian" or "This plugin". Obsidian's review
   rejects both.
