@@ -1,4 +1,4 @@
-import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem } from "obsidian";
 import * as fs from "fs";
 import * as path from "path";
 import { BratInstall, findBratInstall } from "./brat";
@@ -259,82 +259,84 @@ class LinkerSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
-	display() {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		let input = "";
-		new Setting(containerEl)
-			.setName("Link plugin folder")
-			.setDesc("Replaces the installed version until you turn off the link.")
-			.addText((text) => {
-				text.setPlaceholder("~/git/my-plugin").onChange((v) => (input = v));
-				text.inputEl.addClass("local-plugin-linker-path");
-				new FolderSuggest(this.app, text.inputEl);
-			})
-			.addButton((button) =>
-				button
-					.setButtonText("Link")
-					.setCta()
-					.onClick(() => this.plugin.add(input).then(() => this.display(), report)),
-			);
-
-		new Setting(containerEl)
-			.setName("Reload on change")
-			.setDesc("Reload a linked plugin when its files change.")
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.autoReload).onChange(async (on) => {
-					this.plugin.settings.autoReload = on;
-					await this.plugin.save();
-					this.plugin.watchAll();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Turn off BRAT while linked")
-			.setDesc(
-				"Turn off BRAT while a link overrides a plugin it installed, so its updates cannot overwrite your folder. While BRAT is off, none of its plugins update.",
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.pauseBrat).onChange(async (on) => {
-					this.plugin.settings.pauseBrat = on;
-					await this.plugin.save();
-					await this.plugin.syncBrat().catch(report);
-					this.display();
-				}),
-			);
-
-		if (this.plugin.settings.links.length > 0) new Setting(containerEl).setName("Linked plugins").setHeading();
-		for (const link of this.plugin.settings.links) {
-			const row = new Setting(containerEl)
-				.setName(this.plugin.plugins.manifests[link.id]?.name ?? link.id)
-				.setDesc(describe(
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const { plugin } = this;
+		const refresh = () => this.update();
+		return [
+			{
+				name: "Link plugin folder",
+				desc: "Replaces the installed version until you turn off the link.",
+				render: (setting) => {
+					let input = "";
+					setting
+						.addText((text) => {
+							text.setPlaceholder("~/git/my-plugin").onChange((v) => (input = v));
+							text.inputEl.addClass("local-plugin-linker-path");
+							new FolderSuggest(this.app, text.inputEl);
+						})
+						.addButton((button) =>
+							button
+								.setButtonText("Link")
+								.setCta()
+								.onClick(() => plugin.add(input).then(refresh, report)),
+						);
+				},
+			},
+			{
+				name: "Reload on change",
+				desc: "Reload a linked plugin when its files change.",
+				control: { type: "toggle", key: "autoReload" },
+			},
+			{
+				name: "Turn off BRAT while linked",
+				desc: "Turn off BRAT while a link overrides a plugin it installed, so its updates cannot overwrite your folder. While BRAT is off, none of its plugins update.",
+				control: { type: "toggle", key: "pauseBrat" },
+			},
+			{
+				type: "list",
+				heading: "Linked plugins",
+				emptyState: "No linked plugins.",
+				onDelete: (index) => {
+					const link = plugin.settings.links[index];
+					if (link) plugin.remove(link).then(refresh, report);
+				},
+				items: plugin.settings.links.map((link) => ({
+					name: plugin.displayName(link.id),
+					desc: describe(
 						link,
-						this.plugin.brat(link),
-						this.plugin.settings.bratPaused,
-						this.plugin.plugins.enabledPlugins.has(BRAT_ID),
+						plugin.brat(link),
+						plugin.settings.bratPaused,
+						plugin.plugins.enabledPlugins.has(BRAT_ID),
 					),
-				)
-				.addToggle((t) =>
-					t
-						.setTooltip("Use linked folder")
-						.setValue(link.enabled)
-						.onChange((on) => this.plugin.setEnabled(link, on).then(() => this.display(), report)),
-				);
-			if (link.enabled) {
-				row.addExtraButton((b) =>
-					b
-						.setIcon("refresh-cw")
-						.setTooltip("Reload")
-						.onClick(() => this.plugin.reload(link.id)),
-				);
-			}
-			row.addExtraButton((b) =>
-				b
-					.setIcon("trash")
-					.setTooltip("Remove link")
-					.onClick(() => this.plugin.remove(link).then(() => this.display(), report)),
-			);
+					aliases: [link.id],
+					render: (setting: Setting) => {
+						setting.addToggle((t) =>
+							t
+								.setTooltip("Use linked folder")
+								.setValue(link.enabled)
+								.onChange((on) => plugin.setEnabled(link, on).then(refresh, report)),
+						);
+						if (link.enabled) {
+							setting.addExtraButton((b) =>
+								b
+									.setIcon("refresh-cw")
+									.setTooltip("Reload")
+									.onClick(() => plugin.reload(link.id)),
+							);
+						}
+					},
+				})),
+			},
+		];
+	}
+
+	/** A control saves its own value. These keys also change what the linker does now. */
+	async setControlValue(key: string, value: unknown) {
+		await super.setControlValue(key, value);
+		if (key === "autoReload") this.plugin.watchAll();
+		if (key === "pauseBrat") {
+			await this.plugin.syncBrat().catch(report);
+			this.update();
 		}
 	}
 }
