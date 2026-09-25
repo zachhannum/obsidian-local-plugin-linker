@@ -1,13 +1,13 @@
 # CLAUDE.md
 
-Working agreements for the linker. These are policies, not suggestions;
-when something here conflicts with a quick fix, the policy wins and the
+Working agreements for the linker. These are policies, not suggestions.
+If something here conflicts with a quick fix, the policy wins and the
 quick fix waits for its own PR.
 
 ## Project shape
 
 - One Obsidian plugin, desktop only. esbuild bundles `src/main.ts` into
-  a single `main.js` beside `manifest.json` and `styles.css`; `npm run
+  a single `main.js` beside `manifest.json` and `styles.css`. `npm run
   dev` watches.
 - `src/main.ts` holds the plugin, the link lifecycle and the settings
   tab. `src/brat.ts` finds a BRAT install for a link and never touches
@@ -25,20 +25,21 @@ quick fix waits for its own PR.
   over it.
 - Turning a link off puts the stashed version back before any plugin is
   turned on again.
-- The linker turns BRAT back on only when the linker turned it off.
+- If the linker turned BRAT off, the linker turns it back on. Otherwise
+  it leaves BRAT alone.
 - A change to plugin state that must survive a restart is saved.
-  BRAT updates as it loads, before the linker could stop it.
+  BRAT updates as it loads, before the linker can stop it.
 
 ## UI text
 
-- Strings follow Obsidian's settings style: sentence case, a short
-  label as the name, a description only when the name is not enough.
+- Strings follow Obsidian's settings style: sentence case and a short
+  label as the name. If the name is not enough, add a description.
 - Standard UI verbs: turn on, turn off, remove, reload, switch. No
-  coined terms; "shadow" is out, "overrides" is in.
+  coined terms. Write "overrides", not "shadows".
 - A notice names the plugin by its display name and says what happened
   ("Switched Orca to the linked folder.").
-- A warning appears only when its danger is real right now, not when a
-  setting could make it real.
+- A warning shows a danger that is real now. If a setting only makes
+  the danger possible, no warning appears.
 - An error says what failed, then what to do.
 
 ## Testing
@@ -59,7 +60,8 @@ quick fix waits for its own PR.
 - The plugin id and name never contain "obsidian", and the manifest
   description never says "Obsidian" or "This plugin". Obsidian's review
   rejects both.
-- `minAppVersion` moves up when the code uses an API newer than it.
+- If the code uses an API newer than `minAppVersion`, raise
+  `minAppVersion`.
 - The README's disclosures stay true: it reads folders outside the vault
   and uses Obsidian's internal plugin API.
 
@@ -80,26 +82,26 @@ Applies to code comments, the README and this file.
 **DO**
 
 - Keep them short.
-- Only write documentation when the WHY is non-obvious.
+- If the WHY is obvious, write no documentation.
 - Write docs as statements of how things are.
 - Run the `simple-english` skill over prose before it lands.
 
 **DO NOT**
 
 - Document what the code or doc already says.
-- Document deletions or changes over time; history lives in git.
+- Document deletions or changes over time. History lives in git.
 - Include links (code references, PRs, issues, error URLs).
-- Explain why a rejected alternative wasn't taken.
+- Explain why you did not choose a rejected alternative.
 
 ## Conventions
 
 - TypeScript strict, and the flags in `tsconfig.json` are the floor.
-  `noUncheckedIndexedAccess` stays on; no `any`, no `@ts-expect-error`
-  without the line that explains it.
+  `noUncheckedIndexedAccess` stays on. No `any`, and no
+  `@ts-expect-error` without the line that explains it.
 - No inline styles. A style is a class in `styles.css`, prefixed
   `local-plugin-linker-`.
 - Obsidian's own API before hand-built DOM: `Setting`, `Notice`,
   `AbstractInputSuggest`.
 - A doc comment (`/** */`) on an exported item states an invariant, a
-  constraint, or a consequence a reader would otherwise derive from
+  constraint, or a consequence that a reader otherwise derives from
   the implementation. An export with none of those gets no comment.
