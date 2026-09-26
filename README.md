@@ -27,7 +27,15 @@ While a link is on, a BRAT update overwrites files in your folder. Turn off the 
 
 ## Disclosures
 
-This plugin reads folders outside your vault. It reads only the folders that you type or link.
+This plugin uses Node's file system module, because the folders that you link are outside your vault.
+
+It reads only these files and folders:
+
+- The folders that you type in the settings, to suggest folders.
+- The folders that you link, and their git configuration.
+- The BRAT configuration in your vault.
+
+It writes only in your vault's plugins folder. It makes and removes a symlink for each link, and it moves an installed plugin into its own `stash` folder and back. It never changes a file in a folder that you link.
 
 It also uses Obsidian's internal plugin API to turn plugins on, turn them off and reload them. A future Obsidian version can change that API.
 

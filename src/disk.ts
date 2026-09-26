@@ -6,12 +6,18 @@ export function expandHome(p: string): string {
 	return p.replace(/^~(?=$|[\\/])/, os.homedir());
 }
 
-/** Reads the plugin id from a folder's manifest. The error message is shown to the user as is. */
+/**
+ * Reads the plugin id from a folder's manifest. The error message is shown to the user as is.
+ * The id is one folder name, so a link never reaches outside the plugins folder.
+ */
 export function readPluginId(folder: string): string {
 	const manifestPath = path.join(folder, "manifest.json");
 	if (!fs.existsSync(manifestPath)) throw new Error(`Not a plugin folder: manifest.json not found in ${folder}`);
 	const id: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8")).id;
 	if (typeof id !== "string" || id === "") throw new Error("manifest.json is missing an id.");
+	if (/[\\/]/.test(id) || id === "." || id === "..") {
+		throw new Error(`The id "${id}" in manifest.json is not a folder name. Change the id, then link the folder again.`);
+	}
 	return id;
 }
 
