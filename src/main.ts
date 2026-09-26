@@ -128,7 +128,7 @@ export default class LocalPluginLinker extends Plugin {
 	async add(input: string) {
 		const source = path.resolve(expandHome(input.trim()));
 		const id = readPluginId(source);
-		if (id === this.manifest.id) throw new Error("Local Plugin Linker cannot link itself.");
+		if (id === this.manifest.id) throw new Error("Local Linker cannot link itself.");
 
 		const old = this.settings.links.find((l) => l.id === id);
 		if (old?.enabled) await this.setEnabled(old, false);

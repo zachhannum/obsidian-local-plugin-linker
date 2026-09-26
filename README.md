@@ -1,4 +1,4 @@
-# Local Plugin Linker
+# Local Linker
 
 An Obsidian plugin that links a plugin folder on disk into the vault. Each time the plugin rebuilds, the linker reloads it. Desktop only.
 
@@ -10,11 +10,11 @@ To install by hand:
 
 1. Download `main.js`, `manifest.json` and `styles.css` from the latest release.
 2. Put them in `<vault>/.obsidian/plugins/local-plugin-linker/`.
-3. In Obsidian, turn on community plugins, then turn on Local Plugin Linker.
+3. In Obsidian, turn on community plugins, then turn on Local Linker.
 
 ## Use
 
-1. Open Settings, then Local Plugin Linker.
+1. Open Settings, then Local Linker.
 2. Under Link plugin folder, type the path of a plugin folder, for example `~/git/obsidian-orca`. The field suggests folders as you type.
 3. Click Link.
 4. Run the plugin's watch build, for example `npm run dev`.
