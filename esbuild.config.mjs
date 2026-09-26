@@ -1,12 +1,11 @@
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
 
 const prod = process.argv[2] === "production";
 
 const ctx = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external: ["obsidian", "electron", "@codemirror/*", "@lezer/*", ...builtins],
+  external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"],
   format: "cjs",
   target: "es2020",
   platform: "node",
