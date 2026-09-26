@@ -20,7 +20,7 @@ interface BratData {
 export function findBratInstall(pluginsDir: string, id: string, source: string): BratInstall | null {
 	let data: BratData;
 	try {
-		data = JSON.parse(fs.readFileSync(path.join(pluginsDir, "obsidian42-brat", "data.json"), "utf8"));
+		data = JSON.parse(fs.readFileSync(path.join(pluginsDir, "obsidian42-brat", "data.json"), "utf8")) as BratData;
 	} catch {
 		return null;
 	}
