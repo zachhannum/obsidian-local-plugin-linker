@@ -2,7 +2,7 @@
 
 Local Linker lets you develop an Obsidian plugin in its own folder, anywhere on your computer, and run it in a real vault. You link the folder one time. Each time your build writes new files, Local Linker reloads the plugin, so you see your change without a restart.
 
-A link is a symlink (a pointer to your folder) in the plugins folder of your vault. You can make one by hand. Local Linker makes and removes it for you from the settings.
+A link is a symlink (a pointer to your folder) in the plugins folder of your vault. Local Linker makes and removes it for you from the settings.
 
 You can also link a folder over a plugin that you installed from the store or from BRAT. While the link is on, your folder replaces the installed version. When you turn off the link, the installed version comes back.
 
@@ -17,8 +17,6 @@ Local Linker works only on desktop.
 
 Local Linker turns on the plugin. When `main.js`, `styles.css` or `manifest.json` changes in the folder, Local Linker reloads the plugin.
 
-Link the folder that contains `manifest.json`. Your build must write `main.js` and `styles.css` into that same folder.
-
 ## Settings
 
 ### Reload on change
@@ -27,7 +25,7 @@ If this setting is on, Local Linker reloads a linked plugin each time its files 
 
 ### Turn off BRAT while linked
 
-If this setting is on, Local Linker turns off BRAT while a link overrides a plugin that BRAT installed. When no such link is on, Local Linker turns BRAT back on. It is off by default. For the reason, read "Plugins installed by BRAT".
+If this setting is on, Local Linker turns off BRAT while a link overrides a plugin that BRAT installed. When no such link is on, Local Linker turns BRAT back on. It is off by default. See [Plugins installed by BRAT](#plugins-installed-by-brat) for more information.
 
 ### Linked plugins
 
