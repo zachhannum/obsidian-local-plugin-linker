@@ -2,7 +2,7 @@
 
 Local Linker lets you develop an Obsidian plugin in its own folder, anywhere on your computer, and run it in a real vault. You link the folder one time. Each time your build writes new files, Local Linker reloads the plugin, so you see your change without a restart.
 
-Without Local Linker, you keep your source code inside the vault or copy each build into it, and you reload the plugin by hand.
+A link is a symlink (a pointer to your folder) in the plugins folder of your vault. You can make one by hand. Local Linker makes and removes it for you from the settings.
 
 You can also link a folder over a plugin that you installed from the store or from BRAT. While the link is on, your folder replaces the installed version. When you turn off the link, the installed version comes back.
 
@@ -43,7 +43,7 @@ Reload linked plugins reloads each plugin that has its link on.
 
 ## The installed version
 
-You can link a folder for a plugin that is already in your vault. In that case, Local Linker moves the installed plugin folder to `.obsidian/plugins/local-plugin-linker/stash/`. Then it puts a symlink (a pointer to your folder) where the plugin was. When you turn off or remove the link, Local Linker removes the symlink and moves the installed version back. It never deletes a folder.
+You can link a folder for a plugin that is already in your vault. In that case, Local Linker moves the installed plugin folder to `.obsidian/plugins/local-plugin-linker/stash/`. Then it puts the symlink where the plugin was. When you turn off or remove the link, Local Linker removes the symlink and moves the installed version back. It never deletes a folder.
 
 Before you uninstall Local Linker, turn off each link. If you uninstall it while a link is on, you lose the installed version that it saved.
 
