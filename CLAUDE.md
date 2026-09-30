@@ -18,6 +18,7 @@ quick fix waits for its own PR.
   the plugins folder. `brat.ts`, `disk.ts`, `github.ts` and
   `install.ts` never touch Obsidian. `src/desktop.ts` gathers the
   Node-only code, and `src/folder-suggest.ts` suggests folders on disk.
+  `src/repo-suggest.ts` suggests GitHub repositories.
 - Obsidian's private plugin manager is reached through the one
   `PluginManager` interface in `main.ts`. A new private call is added
   there, so the whole private surface stays in one place.

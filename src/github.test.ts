@@ -6,12 +6,14 @@ import {
 	Get,
 	GitHub,
 	HttpResponse,
+	matchRepos,
 	parseRepo,
 	Post,
 	readPluginZip,
 	refLabel,
 	refreshGrant,
 	requestDeviceCode,
+	typedOwner,
 	waitForToken,
 } from "./github";
 
@@ -330,6 +332,77 @@ describe("GitHub.user", () => {
 	it("reads the login of the token owner", async () => {
 		const { get } = fakeGet({ "/user": { login: "someone" } });
 		expect(await new GitHub(get, "secret").user()).toBe("someone");
+	});
+});
+
+describe("GitHub.repo", () => {
+	it("returns the name as GitHub spells it", async () => {
+		const { get } = fakeGet({
+			"/repos/someone/ORCA": { full_name: "someone/orca" },
+			"/repos/someone/orca/actions/workflows?per_page=1": { total_count: 2 },
+		});
+		expect(await new GitHub(get, null).repo("someone/ORCA")).toBe("someone/orca");
+	});
+
+	it("says when GitHub cannot find the repo", async () => {
+		const { get } = fakeGet({});
+		await expect(new GitHub(get, null).repo("someone/orca")).rejects.toThrow(
+			"GitHub cannot find someone/orca. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it.",
+		);
+	});
+
+	it("rejects a repo with no workflow", async () => {
+		const { get } = fakeGet({
+			"/repos/someone/orca": { full_name: "someone/orca" },
+			"/repos/someone/orca/actions/workflows?per_page=1": { total_count: 0 },
+		});
+		await expect(new GitHub(get, null).repo("someone/orca")).rejects.toThrow(
+			"someone/orca has no GitHub Actions workflow. Add one that uploads the plugin's main.js and manifest.json as an artifact.",
+		);
+	});
+
+	it("reports other errors", async () => {
+		const { get } = fakeGet({}, { "/repos/someone/orca": 401 });
+		await expect(new GitHub(get, null).repo("someone/orca")).rejects.toThrow("GitHub rejected the token.");
+	});
+});
+
+describe("GitHub.repos", () => {
+	it("lists the token's repos", async () => {
+		const { get } = fakeGet({ "/user/repos?sort=pushed&per_page=100": [{ full_name: "me/orca" }] });
+		expect(await new GitHub(get, "secret").repos()).toEqual(["me/orca"]);
+	});
+
+	it("lists nothing for the token's repos without a token", async () => {
+		const { get, calls } = fakeGet({});
+		expect(await new GitHub(get, null).repos()).toEqual([]);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("lists an owner's public repos", async () => {
+		const { get } = fakeGet({ "/users/someone/repos?sort=pushed&per_page=100": [{ full_name: "someone/orca" }] });
+		expect(await new GitHub(get, null).repos("someone")).toEqual(["someone/orca"]);
+	});
+});
+
+describe("typedOwner", () => {
+	it.each([
+		["someone/or", "someone"],
+		[" someone/", "someone"],
+		["someone", undefined],
+		["/orca", undefined],
+	])("reads %j", (query, owner) => {
+		expect(typedOwner(query)).toBe(owner);
+	});
+});
+
+describe("matchRepos", () => {
+	it("puts names that start with the query, or whose repo part does, first", () => {
+		expect(matchRepos(["a/xorca", "b/orca", "orca/x", "c/whale"], "orca")).toEqual(["b/orca", "orca/x", "a/xorca"]);
+	});
+
+	it("ignores case and drops repeats", () => {
+		expect(matchRepos(["Me/Orca", "me/orca", "me/whale"], " ME/O")).toEqual(["Me/Orca"]);
 	});
 });
 

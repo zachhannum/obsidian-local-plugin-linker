@@ -71,6 +71,27 @@ export function parseRepo(input: string): string {
 	return `${match[1]}/${match[2]}`;
 }
 
+/** The owner in a partly typed repo name, once a slash follows it. */
+export function typedOwner(query: string): string | undefined {
+	const slash = query.trim().indexOf("/");
+	return slash > 0 ? query.trim().slice(0, slash) : undefined;
+}
+
+/** The names that contain `query`, without case or repeats. A name that starts with it, or whose repo part does, comes first. */
+export function matchRepos(names: string[], query: string): string[] {
+	const q = query.trim().toLowerCase();
+	const seen = new Set<string>();
+	const first: string[] = [];
+	const rest: string[] = [];
+	for (const name of names) {
+		const lower = name.toLowerCase();
+		if (seen.has(lower) || !lower.includes(q)) continue;
+		seen.add(lower);
+		(lower.startsWith(q) || lower.split("/")[1]?.startsWith(q) ? first : rest).push(name);
+	}
+	return [...first, ...rest];
+}
+
 export function refLabel(ref: Pick<Ref, "pr" | "branch" | "title">): string {
 	return ref.pr === undefined ? ref.branch : `#${ref.pr} ${ref.title}`;
 }
@@ -125,6 +146,32 @@ export class GitHub {
 	async user(): Promise<string> {
 		const user = (await this.api("/user", "your account", "read your account")) as { login: string };
 		return user.login;
+	}
+
+	/** Returns the repo's name as GitHub spells it. Throws if GitHub cannot find the repo or it has no workflow. */
+	async repo(name: string): Promise<string> {
+		const response = await this.get(`${API}/repos/${name}`, this.headers());
+		if (response.status === 404) {
+			throw new Error(`GitHub cannot find ${name}. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it.`);
+		}
+		check(response, name, "read the repository");
+		const fullName = (response.json() as { full_name: string }).full_name;
+		const workflows = (await this.api(`/repos/${fullName}/actions/workflows?per_page=1`, fullName, "list the workflows")) as { total_count?: number };
+		if (!workflows.total_count) {
+			throw new Error(`${fullName} has no GitHub Actions workflow. Add one that uploads the plugin's main.js and manifest.json as an artifact.`);
+		}
+		return fullName;
+	}
+
+	/**
+	 * With an owner, the owner's public repos. Without one, the repos the token can read, or none without a token.
+	 * Recently pushed repos come first.
+	 */
+	async repos(owner?: string): Promise<string[]> {
+		if (!owner && !this.token) return [];
+		const route = owner ? `/users/${encodeURIComponent(owner)}/repos?sort=pushed&per_page=100` : "/user/repos?sort=pushed&per_page=100";
+		const list = (await this.api(route, owner || "your account", "list the repositories")) as { full_name: string }[];
+		return list.map((r) => r.full_name);
 	}
 
 	/** GitHub requires a token to download an artifact, even from a public repo. */

@@ -32,6 +32,7 @@ import {
 	waitForToken,
 } from "./github";
 import { buildIn, BuildPaths, buildOut, writeBuild } from "./install";
+import { RepoSuggest } from "./repo-suggest";
 
 type Desktop = typeof import("./desktop");
 
@@ -447,8 +448,10 @@ export default class LocalPluginLinker extends Plugin {
 		this.settings.githubUser = "";
 	}
 
-	async addRepo(name: string) {
-		if (this.settings.repos.some((r) => r.name.toLowerCase() === name.toLowerCase())) return;
+	/** Adds a repo only after GitHub finds it with a workflow, under the name GitHub spells. */
+	async addRepo(input: string) {
+		const name = await (await this.github()).repo(parseRepo(input));
+		if (this.settings.repos.some((r) => r.name.toLowerCase() === name.toLowerCase())) throw new Error(`${name} is already in the list.`);
 		this.settings.repos.push({ name });
 		await this.save();
 	}
@@ -877,18 +880,13 @@ class LinkerSettingTab extends PluginSettingTab {
 						.addText((text) => {
 							text.setPlaceholder("owner/name").onChange((v) => (input = v));
 							text.inputEl.addClass("local-plugin-linker-path");
+							new RepoSuggest(this.app, text.inputEl, () => plugin.github());
 						})
 						.addButton((button) =>
 							button
 								.setButtonText("Add")
 								.setCta()
-								.onClick(() => {
-									try {
-										plugin.addRepo(parseRepo(input)).then(refresh, report);
-									} catch (e) {
-										report(e);
-									}
-								}),
+								.onClick(() => plugin.addRepo(input).then(refresh, report)),
 						);
 				},
 			},
