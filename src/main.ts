@@ -103,7 +103,7 @@ const DEFAULTS: Settings = {
 };
 
 /** The OAuth app that signs in to GitHub, with device flow turned on. A client ID is public. */
-const GITHUB_CLIENT_ID = "";
+const GITHUB_CLIENT_ID = "Ov23lif4T8TFgkDz2A3b";
 
 /** A sign-in keeps its token in Obsidian's secret storage under this name. */
 const SIGN_IN_SECRET = "local-linker-github";
