@@ -84,6 +84,8 @@ interface Settings {
 	githubUser: string;
 	/** Sign in with the repo scope. GitHub has no read-only scope for private repositories. */
 	privateRepos: boolean;
+	/** A personal access token replaces the sign-in, and the settings show only the token. */
+	useToken: boolean;
 	autoReload: boolean;
 	/** Turn BRAT off while any link overrides one of its installs, so no BRAT update writes over a link. */
 	pauseBrat: boolean;
@@ -97,6 +99,7 @@ const DEFAULTS: Settings = {
 	tokenSecret: "",
 	githubUser: "",
 	privateRepos: false,
+	useToken: false,
 	autoReload: true,
 	pauseBrat: false,
 	bratPaused: false,
@@ -152,6 +155,10 @@ export default class LocalPluginLinker extends Plugin {
 		if (Platform.isDesktopApp) this.desktop = await import("./desktop");
 		const data = (await this.loadData()) as Partial<Settings> | null;
 		this.settings = { ...DEFAULTS, ...data };
+		// A token chosen before sign-in existed keeps its place.
+		if (data?.useToken === undefined && this.settings.tokenSecret && this.settings.tokenSecret !== SIGN_IN_SECRET) {
+			this.settings.useToken = true;
+		}
 		this.settings.links = this.settings.links.map((l) => ({ ...l, enabled: l.enabled ?? true }));
 		this.addSettingTab(new LinkerSettingTab(this.app, this));
 		this.addCommand({
@@ -359,17 +366,29 @@ export default class LocalPluginLinker extends Plugin {
 		if (!token) return;
 		this.app.secretStorage.setSecret(SIGN_IN_SECRET, token);
 		this.settings.tokenSecret = SIGN_IN_SECRET;
+		this.settings.useToken = false;
 		this.settings.githubUser = await new GitHub(get, token).user();
 		await this.save();
 		new Notice(`Signed in to GitHub as ${this.settings.githubUser}.`);
 	}
 
 	async signOut() {
+		this.forgetSignIn();
+		await this.save();
+		new Notice("Signed out of GitHub.");
+	}
+
+	/** Switches between a sign-in and a personal access token. Either way starts with no access. */
+	async setUseToken(useToken: boolean) {
+		this.forgetSignIn();
+		this.settings.useToken = useToken;
+		await this.save();
+	}
+
+	private forgetSignIn() {
 		if (this.settings.tokenSecret === SIGN_IN_SECRET) this.app.secretStorage.setSecret(SIGN_IN_SECRET, "");
 		this.settings.tokenSecret = "";
 		this.settings.githubUser = "";
-		await this.save();
-		new Notice("Signed out of GitHub.");
 	}
 
 	async addRepo(name: string) {
@@ -703,35 +722,41 @@ class LinkerSettingTab extends PluginSettingTab {
 				desc: plugin.settings.githubUser
 					? `Signed in as ${plugin.settings.githubUser}.`
 					: "Sign in to download builds from GitHub Actions.",
+				visible: () => !plugin.settings.useToken,
 				render: (setting) => {
 					if (plugin.settings.githubUser) {
 						setting.addButton((b) => b.setButtonText("Sign out").onClick(() => plugin.signOut().then(refresh, report)));
-					} else {
-						setting.addButton((b) =>
+						return;
+					}
+					setting
+						.addButton((b) => b.setButtonText("Use a token").onClick(() => plugin.setUseToken(true).then(refresh, report)))
+						.addButton((b) =>
 							b
 								.setButtonText("Sign in")
 								.setCta()
 								.onClick(() => plugin.signIn().then(refresh, report)),
 						);
-					}
 				},
 			},
 			{
 				name: "Include private repositories",
 				desc: "Ask for access to your private repositories when you sign in. GitHub then gives Local Linker read and write access to all of them, because GitHub has no read-only access for private repositories.",
+				visible: () => !plugin.settings.useToken && !plugin.settings.githubUser,
 				control: { type: "toggle", key: "privateRepos" },
 			},
 			{
 				name: "GitHub token",
-				desc: "Use a personal access token instead of signing in.",
-				visible: () => !plugin.settings.githubUser,
+				desc: "A personal access token, kept in Obsidian's secret storage.",
+				visible: () => plugin.settings.useToken,
 				render: (setting) => {
-					setting.addComponent((el) =>
-						new SecretComponent(this.app, el).setValue(plugin.settings.tokenSecret).onChange(async (value) => {
-							plugin.settings.tokenSecret = value;
-							await plugin.save();
-						}),
-					);
+					setting
+						.addComponent((el) =>
+							new SecretComponent(this.app, el).setValue(plugin.settings.tokenSecret).onChange(async (value) => {
+								plugin.settings.tokenSecret = value;
+								await plugin.save();
+							}),
+						)
+						.addButton((b) => b.setButtonText("Sign in instead").onClick(() => plugin.setUseToken(false).then(refresh, report)));
 				},
 			},
 			{
@@ -794,7 +819,6 @@ class LinkerSettingTab extends PluginSettingTab {
 	async setControlValue(key: string, value: unknown) {
 		await super.setControlValue(key, value);
 		if (key === "autoReload") this.plugin.watchAll();
-		if (key === "privateRepos" && this.plugin.settings.githubUser) new Notice("Sign out and sign in again to apply the change.");
 		if (key === "pauseBrat") {
 			await this.plugin.syncBrat().catch(report);
 			this.update();

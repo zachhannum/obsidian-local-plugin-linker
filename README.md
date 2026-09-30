@@ -93,15 +93,15 @@ The list shows each linked folder and each build. For a folder, it shows the pat
 
 ### GitHub account
 
-Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications.
+Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications. To use a personal access token instead, select Use a token.
 
 ### Include private repositories
 
-If this setting is on, the sign-in asks for access to your private repositories. GitHub has no read-only access for private repositories, so GitHub gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. If you change it while you are signed in, sign out and sign in again.
+If this setting is on, the sign-in asks for access to your private repositories. GitHub has no read-only access for private repositories, so GitHub gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. The setting appears only while you are signed out.
 
 ### GitHub token
 
-If you do not want to sign in, use a personal access token instead. While you are signed in, this setting is hidden. For a public repository, a fine-grained token with read-only access to public repositories is enough. For a private repository, give the token read access to Actions on that repository.
+This setting appears in place of GitHub account after you select Use a token. To go back, select Sign in instead. For a public repository, a fine-grained token with read-only access to public repositories is enough. For a private repository, give the token read access to Actions on that repository.
 
 ### GitHub repositories
 
