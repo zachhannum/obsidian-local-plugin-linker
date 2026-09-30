@@ -909,7 +909,7 @@ class LinkerSettingTab extends PluginSettingTab {
 							setting.addExtraButton((b) =>
 								b
 									.setIcon("rotate-ccw")
-									.setTooltip("Ask for the artifact next time")
+									.setTooltip("Reset artifact name")
 									.onClick(() => {
 										delete repo.artifact;
 										plugin.save().then(refresh, report);
