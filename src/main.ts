@@ -3,6 +3,7 @@ import {
 	FileSystemAdapter,
 	FuzzyMatch,
 	FuzzySuggestModal,
+	Modal,
 	normalizePath,
 	Notice,
 	Platform,
@@ -14,7 +15,19 @@ import {
 	SettingDefinitionItem,
 } from "obsidian";
 import { BratInstall, findBratInstall } from "./brat";
-import { Artifact, chooseArtifact, Get, GitHub, parseRepo, Ref, refLabel } from "./github";
+import {
+	Artifact,
+	chooseArtifact,
+	DeviceCode,
+	Get,
+	GitHub,
+	parseRepo,
+	Post,
+	Ref,
+	refLabel,
+	requestDeviceCode,
+	waitForToken,
+} from "./github";
 import { buildIn, BuildPaths, buildOut, writeBuild } from "./install";
 
 type Desktop = typeof import("./desktop");
@@ -67,6 +80,10 @@ interface Settings {
 	repos: Repo[];
 	/** The name of the token in Obsidian's secret storage, never the token itself. */
 	tokenSecret: string;
+	/** The GitHub login of the signed-in account. Empty when the token is not from a sign-in. */
+	githubUser: string;
+	/** Sign in with the repo scope. GitHub has no read-only scope for private repositories. */
+	privateRepos: boolean;
 	autoReload: boolean;
 	/** Turn BRAT off while any link overrides one of its installs, so no BRAT update writes over a link. */
 	pauseBrat: boolean;
@@ -74,7 +91,22 @@ interface Settings {
 	bratPaused: boolean;
 }
 
-const DEFAULTS: Settings = { links: [], repos: [], tokenSecret: "", autoReload: true, pauseBrat: false, bratPaused: false };
+const DEFAULTS: Settings = {
+	links: [],
+	repos: [],
+	tokenSecret: "",
+	githubUser: "",
+	privateRepos: false,
+	autoReload: true,
+	pauseBrat: false,
+	bratPaused: false,
+};
+
+/** The OAuth app that signs in to GitHub, with device flow turned on. A client ID is public. */
+const GITHUB_CLIENT_ID = "";
+
+/** A sign-in keeps its token in Obsidian's secret storage under this name. */
+const SIGN_IN_SECRET = "local-linker-github";
 
 const BRAT_ID = "obsidian42-brat";
 
@@ -87,6 +119,18 @@ const WATCHED = new Set(["main.js", "styles.css", "manifest.json"]);
 
 const get: Get = async (url, headers) => {
 	const response = await requestUrl({ url, headers, throw: false });
+	return { status: response.status, json: () => response.json as unknown, bytes: () => response.arrayBuffer };
+};
+
+const post: Post = async (url, form) => {
+	const response = await requestUrl({
+		url,
+		method: "POST",
+		contentType: "application/x-www-form-urlencoded",
+		headers: { Accept: "application/json" },
+		body: new URLSearchParams(form).toString(),
+		throw: false,
+	});
 	return { status: response.status, json: () => response.json as unknown, bytes: () => response.arrayBuffer };
 };
 
@@ -305,6 +349,29 @@ export default class LocalPluginLinker extends Plugin {
 		return new GitHub(get, token);
 	}
 
+	/** Signs in with GitHub's device flow. The person types a code on GitHub, so no token is copied by hand. */
+	async signIn() {
+		if (!GITHUB_CLIENT_ID) throw new Error("Sign-in to GitHub is not set up in this build. Use a token instead.");
+		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID, this.settings.privateRepos ? "repo" : "");
+		const modal = new SignInModal(this.app, code);
+		modal.open();
+		const token = await waitForToken(post, GITHUB_CLIENT_ID, code, (ms) => modal.wait(ms)).finally(() => modal.close());
+		if (!token) return;
+		this.app.secretStorage.setSecret(SIGN_IN_SECRET, token);
+		this.settings.tokenSecret = SIGN_IN_SECRET;
+		this.settings.githubUser = await new GitHub(get, token).user();
+		await this.save();
+		new Notice(`Signed in to GitHub as ${this.settings.githubUser}.`);
+	}
+
+	async signOut() {
+		if (this.settings.tokenSecret === SIGN_IN_SECRET) this.app.secretStorage.setSecret(SIGN_IN_SECRET, "");
+		this.settings.tokenSecret = "";
+		this.settings.githubUser = "";
+		await this.save();
+		new Notice("Signed out of GitHub.");
+	}
+
 	async addRepo(name: string) {
 		if (this.settings.repos.some((r) => r.name.toLowerCase() === name.toLowerCase())) return;
 		this.settings.repos.push({ name });
@@ -426,6 +493,55 @@ export default class LocalPluginLinker extends Plugin {
 
 	unwatchAll() {
 		for (const id of [...this.watchers.keys()]) this.unwatch(id);
+	}
+}
+
+/** Shows the code to type on GitHub while the sign-in waits. Closing it cancels the sign-in. */
+class SignInModal extends Modal {
+	private closed = false;
+	private cancel: (() => void) | null = null;
+
+	constructor(
+		app: App,
+		private code: DeviceCode,
+	) {
+		super(app);
+	}
+
+	onOpen() {
+		const { code } = this;
+		this.setTitle("Sign in to GitHub");
+		this.contentEl.createEl("p", { text: "Enter this code on GitHub. The sign-in finishes when GitHub accepts it." });
+		this.contentEl.createEl("p", { text: code.userCode, cls: "local-plugin-linker-code" });
+		new Setting(this.contentEl).addButton((b) =>
+			b
+				.setButtonText("Copy code and open GitHub")
+				.setCta()
+				.onClick(async () => {
+					await navigator.clipboard.writeText(code.userCode);
+					window.open(code.verificationUri);
+				}),
+		);
+	}
+
+	onClose() {
+		this.closed = true;
+		this.cancel?.();
+	}
+
+	/** Resolves true after `ms`, or false as soon as the modal closes. */
+	wait(ms: number): Promise<boolean> {
+		if (this.closed) return Promise.resolve(false);
+		return new Promise((resolve) => {
+			const timer = window.setTimeout(() => {
+				this.cancel = null;
+				resolve(true);
+			}, ms);
+			this.cancel = () => {
+				window.clearTimeout(timer);
+				resolve(false);
+			};
+		});
 	}
 }
 
@@ -583,8 +699,32 @@ class LinkerSettingTab extends PluginSettingTab {
 				})),
 			},
 			{
+				name: "GitHub account",
+				desc: plugin.settings.githubUser
+					? `Signed in as ${plugin.settings.githubUser}.`
+					: "Sign in to download builds from GitHub Actions.",
+				render: (setting) => {
+					if (plugin.settings.githubUser) {
+						setting.addButton((b) => b.setButtonText("Sign out").onClick(() => plugin.signOut().then(refresh, report)));
+					} else {
+						setting.addButton((b) =>
+							b
+								.setButtonText("Sign in")
+								.setCta()
+								.onClick(() => plugin.signIn().then(refresh, report)),
+						);
+					}
+				},
+			},
+			{
+				name: "Include private repositories",
+				desc: "Ask for access to your private repositories when you sign in. GitHub then gives Local Linker read and write access to all of them, because GitHub has no read-only access for private repositories.",
+				control: { type: "toggle", key: "privateRepos" },
+			},
+			{
 				name: "GitHub token",
-				desc: "Needed to download a build from GitHub Actions. For a public repository, a token with read-only access to public repositories is enough.",
+				desc: "Use a personal access token instead of signing in.",
+				visible: () => !plugin.settings.githubUser,
 				render: (setting) => {
 					setting.addComponent((el) =>
 						new SecretComponent(this.app, el).setValue(plugin.settings.tokenSecret).onChange(async (value) => {
@@ -654,6 +794,7 @@ class LinkerSettingTab extends PluginSettingTab {
 	async setControlValue(key: string, value: unknown) {
 		await super.setControlValue(key, value);
 		if (key === "autoReload") this.plugin.watchAll();
+		if (key === "privateRepos" && this.plugin.settings.githubUser) new Notice("Sign out and sign in again to apply the change.");
 		if (key === "pauseBrat") {
 			await this.plugin.syncBrat().catch(report);
 			this.update();

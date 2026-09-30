@@ -1,6 +1,18 @@
 import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { chooseArtifact, Get, GitHub, HttpResponse, parseRepo, readPluginZip, refLabel } from "./github";
+import {
+	chooseArtifact,
+	DeviceCode,
+	Get,
+	GitHub,
+	HttpResponse,
+	parseRepo,
+	Post,
+	readPluginZip,
+	refLabel,
+	requestDeviceCode,
+	waitForToken,
+} from "./github";
 
 const API = "https://api.github.com";
 
@@ -91,10 +103,10 @@ describe("GitHub.refs", () => {
 	});
 
 	it.each([
-		[401, "GitHub did not accept the token. Replace the token in Local Linker settings."],
-		[403, "GitHub refused the request, probably because of its rate limit. Add a token, or try again later."],
-		[429, "GitHub refused the request, probably because of its rate limit. Add a token, or try again later."],
-		[404, "GitHub cannot find someone/orca or its build. Check the name, or add a token that can read the repository."],
+		[401, "GitHub did not accept the sign-in. Sign in again in Local Linker settings."],
+		[403, "GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later."],
+		[429, "GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later."],
+		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, sign in with private repositories turned on."],
 		[410, "The build expired on GitHub. Run the workflow again, then install again."],
 		[502, "GitHub returned status 502. Try again later."],
 	])("explains status %i", async (code, message) => {
@@ -179,7 +191,7 @@ describe("GitHub.download", () => {
 	it("needs a token", async () => {
 		const { get, calls } = fakeGet({});
 		await expect(new GitHub(get, null).download("someone/orca", { id: 1, name: "plugin" })).rejects.toThrow(
-			"A GitHub token is required to download a build. Add one in Local Linker settings.",
+			"Sign in to GitHub in Local Linker settings to download a build.",
 		);
 		expect(calls).toEqual([]);
 	});
@@ -274,5 +286,101 @@ describe("readPluginZip", () => {
 		expect(() => read({ "manifest.json": JSON.stringify(m), "main.js": "" })).toThrow(
 			"The manifest.json in the artifact plugin has no valid id.",
 		);
+	});
+});
+
+describe("GitHub.user", () => {
+	it("reads the login of the token owner", async () => {
+		const { get } = fakeGet({ "/user": { login: "someone" } });
+		expect(await new GitHub(get, "secret").user()).toBe("someone");
+	});
+});
+
+/** Answers each POST with the next body in `bodies`, and records each form. */
+function fakePost(...bodies: unknown[]) {
+	const forms: { url: string; form: Record<string, string> }[] = [];
+	const post: Post = async (url, form) => {
+		forms.push({ url, form });
+		return respond(200, bodies.shift());
+	};
+	return { post, forms };
+}
+
+describe("requestDeviceCode", () => {
+	it("starts the device flow with the scope", async () => {
+		const { post, forms } = fakePost({ device_code: "dev", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", interval: 7 });
+		expect(await requestDeviceCode(post, "client", "repo")).toEqual({
+			deviceCode: "dev",
+			userCode: "ABCD-1234",
+			verificationUri: "https://github.com/login/device",
+			interval: 7,
+		});
+		expect(forms).toEqual([{ url: "https://github.com/login/device/code", form: { client_id: "client", scope: "repo" } }]);
+	});
+
+	it("polls every five seconds when GitHub gives no interval", async () => {
+		const { post } = fakePost({ device_code: "dev", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device" });
+		expect((await requestDeviceCode(post, "client", "")).interval).toBe(5);
+	});
+
+	it("explains a refusal", async () => {
+		const { post } = fakePost({ error: "device_flow_disabled", error_description: "Device Flow must be explicitly enabled" });
+		await expect(requestDeviceCode(post, "client", "")).rejects.toThrow(
+			"GitHub did not start the sign-in: Device Flow must be explicitly enabled. Try again later.",
+		);
+	});
+
+	it("explains a refusal without a description", async () => {
+		const { post } = fakePost({});
+		await expect(requestDeviceCode(post, "client", "")).rejects.toThrow("GitHub did not start the sign-in: no code. Try again later.");
+	});
+});
+
+describe("waitForToken", () => {
+	const code: DeviceCode = { deviceCode: "dev", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", interval: 5 };
+
+	function recordWaits(cancelAfter = Infinity) {
+		const waits: number[] = [];
+		const wait = async (ms: number) => {
+			waits.push(ms);
+			return waits.length <= cancelAfter;
+		};
+		return { wait, waits };
+	}
+
+	it("polls until the person enters the code", async () => {
+		const { post, forms } = fakePost({ error: "authorization_pending" }, { access_token: "token" });
+		const { wait, waits } = recordWaits();
+		expect(await waitForToken(post, "client", code, wait)).toBe("token");
+		expect(waits).toEqual([5000, 5000]);
+		expect(forms[0]).toEqual({
+			url: "https://github.com/login/oauth/access_token",
+			form: { client_id: "client", device_code: "dev", grant_type: "urn:ietf:params:oauth:grant-type:device_code" },
+		});
+	});
+
+	it("slows down when GitHub asks", async () => {
+		const { post } = fakePost({ error: "slow_down", interval: 10 }, { error: "slow_down" }, { access_token: "token" });
+		const { wait, waits } = recordWaits();
+		await waitForToken(post, "client", code, wait);
+		expect(waits).toEqual([5000, 10000, 15000]);
+	});
+
+	it("stops when the wait is canceled", async () => {
+		const { post, forms } = fakePost({ error: "authorization_pending" });
+		const { wait } = recordWaits(1);
+		expect(await waitForToken(post, "client", code, wait)).toBeNull();
+		expect(forms).toHaveLength(1);
+	});
+
+	it.each([
+		[{ error: "expired_token" }, "The sign-in code expired. Select Sign in again."],
+		[{ error: "access_denied" }, "You canceled the sign-in on GitHub."],
+		[{ error: "incorrect_client_credentials", error_description: "bad client" }, "GitHub sign-in failed: bad client. Try again later."],
+		[{ error: "unsupported_grant_type" }, "GitHub sign-in failed: unsupported_grant_type. Try again later."],
+		[{}, "GitHub sign-in failed: no token. Try again later."],
+	])("explains %j", async (body, message) => {
+		const { post } = fakePost(body);
+		await expect(waitForToken(post, "client", code, recordWaits().wait)).rejects.toThrow(message);
 	});
 });

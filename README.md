@@ -23,8 +23,8 @@ Local Linker turns on the plugin. When `main.js`, `styles.css` or `manifest.json
 
 The repository must have a workflow that uploads the plugin as an artifact. An artifact is a zip file that a workflow run keeps on GitHub. See [Set up the workflow](#set-up-the-workflow).
 
-1. On GitHub, make a fine-grained personal access token. For a public repository, read-only access to public repositories is enough. For a private repository, give the token read access to Actions on that repository.
-2. In Local Linker settings, in GitHub token, select the token. You can add it to Obsidian's secret storage from there.
+1. In Local Linker settings, in GitHub account, select Sign in.
+2. Select Copy code and open GitHub. On GitHub, paste the code and approve Local Linker.
 3. In Add GitHub repository, type the repository, for example `someone/my-plugin`. Then select Add.
 4. In GitHub repositories, select Install a build.
 5. Choose a pull request or a branch. The list shows open pull requests first, then branches.
@@ -91,9 +91,17 @@ The list shows each linked folder and each build. For a folder, it shows the pat
 - The reload button reloads the plugin now.
 - The remove button turns off the link, then removes it from the list. Your folder stays on disk. The downloaded build is deleted.
 
+### GitHub account
+
+Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications.
+
+### Include private repositories
+
+If this setting is on, the sign-in asks for access to your private repositories. GitHub has no read-only access for private repositories, so GitHub gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. If you change it while you are signed in, sign out and sign in again.
+
 ### GitHub token
 
-The token that Local Linker uses for GitHub. GitHub requires a token to download an artifact, even from a public repository. The token is kept in Obsidian's secret storage, not in the settings file of Local Linker.
+If you do not want to sign in, use a personal access token instead. While you are signed in, this setting is hidden. For a public repository, a fine-grained token with read-only access to public repositories is enough. For a private repository, give the token read access to Actions on that repository.
 
 ### GitHub repositories
 
@@ -145,7 +153,7 @@ It reads only these files and folders:
 
 It writes only in your vault's plugins folder. It makes and removes a symlink for each link, and it writes the files of each build that you install. It moves an installed plugin into its own `stash` folder and back. It never changes a file in a folder that you link.
 
-To install a build, it connects to the GitHub API at `api.github.com` and downloads the artifact from GitHub. It sends your GitHub token with each request. It connects to GitHub only to install or update a build. You need a GitHub account to make a token.
+To install a build, it connects to the GitHub API at `api.github.com` and downloads the artifact from GitHub. To sign in, it connects to `github.com`. It sends your GitHub token with each request to GitHub. It connects to GitHub only to sign in, and to install or update a build. You need a GitHub account.
 
 It also uses Obsidian's internal plugin API to turn plugins on, turn them off and reload them. A future Obsidian version can change that API.
 

@@ -9,6 +9,21 @@ export interface HttpResponse {
 /** A GET request. It resolves for every status, and it follows redirects. */
 export type Get = (url: string, headers: Record<string, string>) => Promise<HttpResponse>;
 
+/** A POST of a form. It resolves for every status. */
+export type Post = (url: string, form: Record<string, string>) => Promise<HttpResponse>;
+
+/** Waits `ms`. It resolves false if the person cancels the wait. */
+export type Wait = (ms: number) => Promise<boolean>;
+
+/** A code that the person types on GitHub to sign in. */
+export interface DeviceCode {
+	deviceCode: string;
+	userCode: string;
+	verificationUri: string;
+	/** Seconds between polls. */
+	interval: number;
+}
+
 /** An open pull request or a branch, at its newest commit. */
 export interface Ref {
 	/** A pull request has a number. A branch has none. */
@@ -92,9 +107,15 @@ export class GitHub {
 		return [...byName.values()].map(({ id, name }) => ({ id, name }));
 	}
 
+	/** The login of the token's owner. */
+	async user(): Promise<string> {
+		const user = (await this.api("/user", "your account")) as { login: string };
+		return user.login;
+	}
+
 	/** GitHub requires a token to download an artifact, even from a public repo. */
 	async download(repo: string, artifact: Artifact): Promise<PluginBuild> {
-		if (!this.token) throw new Error("A GitHub token is required to download a build. Add one in Local Linker settings.");
+		if (!this.token) throw new Error("Sign in to GitHub in Local Linker settings to download a build.");
 		const response = await this.get(`${API}/repos/${repo}/actions/artifacts/${artifact.id}/zip`, this.headers());
 		check(response, repo);
 		return readPluginZip(response.bytes(), artifact.name);
@@ -155,14 +176,58 @@ export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBui
 	return { id, name: typeof manifest.name === "string" ? manifest.name : id, files };
 }
 
+/** Starts GitHub's device flow. An empty scope reads public repositories only. */
+export async function requestDeviceCode(post: Post, clientId: string, scope: string): Promise<DeviceCode> {
+	const body = (await post("https://github.com/login/device/code", { client_id: clientId, scope })).json() as {
+		device_code?: string;
+		user_code?: string;
+		verification_uri?: string;
+		interval?: number;
+		error_description?: string;
+	};
+	if (!body.device_code || !body.user_code || !body.verification_uri) {
+		throw new Error(`GitHub did not start the sign-in: ${body.error_description ?? "no code"}. Try again later.`);
+	}
+	return {
+		deviceCode: body.device_code,
+		userCode: body.user_code,
+		verificationUri: body.verification_uri,
+		interval: body.interval ?? 5,
+	};
+}
+
+/** Polls until the person enters the code on GitHub. It resolves null if the wait is canceled. */
+export async function waitForToken(post: Post, clientId: string, code: DeviceCode, wait: Wait): Promise<string | null> {
+	let interval = code.interval;
+	for (;;) {
+		if (!(await wait(interval * 1000))) return null;
+		const body = (
+			await post("https://github.com/login/oauth/access_token", {
+				client_id: clientId,
+				device_code: code.deviceCode,
+				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+			})
+		).json() as { access_token?: string; error?: string; error_description?: string; interval?: number };
+		if (body.access_token) return body.access_token;
+		if (body.error === "authorization_pending") continue;
+		if (body.error === "slow_down") {
+			interval = body.interval ?? interval + 5;
+			continue;
+		}
+		if (body.error === "expired_token") throw new Error("The sign-in code expired. Select Sign in again.");
+		if (body.error === "access_denied") throw new Error("You canceled the sign-in on GitHub.");
+		throw new Error(`GitHub sign-in failed: ${body.error_description ?? body.error ?? "no token"}. Try again later.`);
+	}
+}
+
 function check(response: HttpResponse, repo: string) {
 	const { status } = response;
 	if (status < 400) return;
-	if (status === 401) throw new Error("GitHub did not accept the token. Replace the token in Local Linker settings.");
+	if (status === 401) throw new Error("GitHub did not accept the sign-in. Sign in again in Local Linker settings.");
 	if (status === 403 || status === 429) {
-		throw new Error("GitHub refused the request, probably because of its rate limit. Add a token, or try again later.");
+		throw new Error("GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later.");
 	}
-	if (status === 404) throw new Error(`GitHub cannot find ${repo} or its build. Check the name, or add a token that can read the repository.`);
+	if (status === 404) throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, sign in with private repositories turned on.`);
 	if (status === 410) throw new Error("The build expired on GitHub. Run the workflow again, then install again.");
 	throw new Error(`GitHub returned status ${status}. Try again later.`);
 }
