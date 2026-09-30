@@ -58,7 +58,7 @@ describe("parseRepo", () => {
 	});
 
 	it.each(["orca", "", "https://github.com/someone", "some one/orca"])("rejects %j", (input) => {
-		expect(() => parseRepo(input)).toThrow(`"${input}" is not a GitHub repository. Type it as owner/name.`);
+		expect(() => parseRepo(input)).toThrow(`"${input}" is not a valid repository. Use the format owner/name.`);
 	});
 });
 
@@ -105,11 +105,11 @@ describe("GitHub.refs", () => {
 	});
 
 	it.each([
-		[401, "GitHub did not accept the sign-in. Sign in again in Local Linker settings."],
+		[401, "GitHub rejected the token. Sign in again in Local Linker settings."],
 		[403, "GitHub refused to list the branches of someone/orca. Sign in again, or use a token that can read someone/orca."],
-		[429, "GitHub's rate limit is reached. Sign in to GitHub, or try again later."],
-		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, sign in with private repositories turned on."],
-		[410, "The build expired on GitHub. Run the workflow again, then install again."],
+		[429, "GitHub rate limit reached. Sign in, or try again later."],
+		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, turn on Include private repositories and sign in again."],
+		[410, "This build has expired on GitHub. Rerun the workflow, then install again."],
 		[502, "GitHub returned status 502 when it tried to list the branches. Try again later."],
 	])("explains status %i", async (code, message) => {
 		const { get } = fakeGet(routes, { "/repos/someone/orca/branches?per_page=100": code });
@@ -117,9 +117,9 @@ describe("GitHub.refs", () => {
 	});
 
 	it.each([
-		[403, { message: "API rate limit exceeded for 1.2.3.4." }, "GitHub's rate limit is reached."],
+		[403, { message: "API rate limit exceeded for 1.2.3.4." }, "GitHub rate limit reached."],
 		[403, { message: "Resource not accessible by integration" }, "of someone/orca. GitHub says: Resource not accessible by integration. Sign in"],
-		[401, { message: "Bad credentials" }, "GitHub did not accept the sign-in. GitHub says: Bad credentials. Sign in again"],
+		[401, { message: "Bad credentials" }, "GitHub rejected the token. GitHub says: Bad credentials. Sign in again"],
 		[500, { message: 7 }, "GitHub returned status 500 when it tried to list the branches. Try again later."],
 	])("uses GitHub's message for status %i: %j", async (code, body, message) => {
 		const { get } = fakeGet(routes, { "/repos/someone/orca/branches?per_page=100": [code, body] });
@@ -243,7 +243,7 @@ describe("GitHub.download", () => {
 	it("reports a failed download", async () => {
 		const { get } = fakeGet({}, { "/repos/someone/orca/actions/artifacts/1/zip": 410 });
 		await expect(new GitHub(get, "secret").download("someone/orca", { id: 1, name: "plugin" })).rejects.toThrow(
-			"The build expired on GitHub.",
+			"This build has expired on GitHub.",
 		);
 	});
 });
@@ -300,18 +300,18 @@ describe("readPluginZip", () => {
 
 	it("fails on a file that is not a zip", () => {
 		expect(() => readPluginZip(strToU8("nope").slice().buffer, "plugin")).toThrow(
-			"The artifact plugin is not a zip file. Try the download again.",
+			"The artifact plugin is not a zip file. Try downloading it again.",
 		);
 	});
 
 	it("fails without a manifest", () => {
 		expect(() => read({ "main.js": "code" })).toThrow(
-			"The artifact plugin has no manifest.json. Choose the artifact that holds the plugin build.",
+			"The artifact plugin does not contain a manifest.json. Choose the artifact that contains the plugin.",
 		);
 	});
 
 	it("fails without main.js", () => {
-		expect(() => read({ "manifest.json": manifest })).toThrow("The artifact plugin has no main.js beside its manifest.json.");
+		expect(() => read({ "manifest.json": manifest })).toThrow("The artifact plugin has no main.js next to its manifest.json.");
 	});
 
 	it("fails when the manifest is not JSON", () => {
@@ -410,7 +410,7 @@ describe("waitForToken", () => {
 	});
 
 	it.each([
-		[{ error: "expired_token" }, "The sign-in code expired. Select Sign in again."],
+		[{ error: "expired_token" }, "The sign-in code expired. Sign in again."],
 		[{ error: "access_denied" }, "You canceled the sign-in on GitHub."],
 		[{ error: "incorrect_client_credentials", error_description: "bad client" }, "GitHub sign-in failed: bad client. Try again later."],
 		[{ error: "unsupported_grant_type" }, "GitHub sign-in failed: unsupported_grant_type. Try again later."],

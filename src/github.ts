@@ -58,7 +58,7 @@ const API = "https://api.github.com";
 export function parseRepo(input: string): string {
 	const path = input.trim().replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\//i, "");
 	const match = /^([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/#?].*)?$/.exec(path);
-	if (!match) throw new Error(`"${input}" is not a GitHub repository. Type it as owner/name.`);
+	if (!match) throw new Error(`"${input}" is not a valid repository. Use the format owner/name.`);
 	return `${match[1]}/${match[2]}`;
 }
 
@@ -153,13 +153,13 @@ export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBui
 	try {
 		entries = unzipSync(new Uint8Array(zip));
 	} catch {
-		throw new Error(`The artifact ${artifactName} is not a zip file. Try the download again.`);
+		throw new Error(`The artifact ${artifactName} is not a zip file. Try downloading it again.`);
 	}
 	const manifestPath = Object.keys(entries)
 		.filter((p) => p === "manifest.json" || p.endsWith("/manifest.json"))
 		.sort((a, b) => a.split("/").length - b.split("/").length)[0];
 	if (manifestPath === undefined) {
-		throw new Error(`The artifact ${artifactName} has no manifest.json. Choose the artifact that holds the plugin build.`);
+		throw new Error(`The artifact ${artifactName} does not contain a manifest.json. Choose the artifact that contains the plugin.`);
 	}
 	const dir = manifestPath.slice(0, -"manifest.json".length);
 	const files: Record<string, Uint8Array> = {};
@@ -167,7 +167,7 @@ export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBui
 		const data = entries[dir + name];
 		if (data) files[name] = data;
 	}
-	if (!files["main.js"]) throw new Error(`The artifact ${artifactName} has no main.js beside its manifest.json.`);
+	if (!files["main.js"]) throw new Error(`The artifact ${artifactName} has no main.js next to its manifest.json.`);
 	let manifest: { id?: unknown; name?: unknown };
 	try {
 		manifest = JSON.parse(new TextDecoder().decode(files["manifest.json"])) as typeof manifest;
@@ -219,7 +219,7 @@ export async function waitForToken(post: Post, clientId: string, code: DeviceCod
 			interval = body.interval ?? interval + 5;
 			continue;
 		}
-		if (body.error === "expired_token") throw new Error("The sign-in code expired. Select Sign in again.");
+		if (body.error === "expired_token") throw new Error("The sign-in code expired. Sign in again.");
 		if (body.error === "access_denied") throw new Error("You canceled the sign-in on GitHub.");
 		throw new Error(`GitHub sign-in failed: ${body.error_description ?? body.error ?? "no token"}. Try again later.`);
 	}
@@ -231,15 +231,15 @@ function check(response: HttpResponse, repo: string, step: string) {
 	if (status < 400) return;
 	const reason = errorMessage(response);
 	const says = reason ? ` GitHub says: ${reason.replace(/\.?$/, ".")}` : "";
-	if (status === 401) throw new Error(`GitHub did not accept the sign-in.${says} Sign in again in Local Linker settings.`);
+	if (status === 401) throw new Error(`GitHub rejected the token.${says} Sign in again in Local Linker settings.`);
 	if (status === 429 || /rate limit/i.test(reason)) {
-		throw new Error("GitHub's rate limit is reached. Sign in to GitHub, or try again later.");
+		throw new Error("GitHub rate limit reached. Sign in, or try again later.");
 	}
 	if (status === 403) throw new Error(`GitHub refused to ${step} of ${repo}.${says} Sign in again, or use a token that can read ${repo}.`);
 	if (status === 404) {
-		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, sign in with private repositories turned on.`);
+		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, turn on Include private repositories and sign in again.`);
 	}
-	if (status === 410) throw new Error("The build expired on GitHub. Run the workflow again, then install again.");
+	if (status === 410) throw new Error("This build has expired on GitHub. Rerun the workflow, then install again.");
 	throw new Error(`GitHub returned status ${status} when it tried to ${step}.${says} Try again later.`);
 }
 

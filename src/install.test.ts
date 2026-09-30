@@ -127,7 +127,7 @@ describe("buildIn", () => {
 		files.put(`${paths.stash}/main.js`, "stashed");
 		files.put(`${paths.parked}/main.js`, "build");
 		await expect(buildIn(files, "orca", paths)).rejects.toThrow(
-			`Cannot turn on the build. A saved version of orca already exists in ${paths.stash}.`,
+			`Cannot turn on the build. A backup of orca already exists in ${paths.stash}.`,
 		);
 		expect(files.text(`${paths.target}/main.js`)).toBe("installed");
 		expect(files.text(`${paths.stash}/main.js`)).toBe("stashed");
@@ -136,7 +136,7 @@ describe("buildIn", () => {
 
 	it("fails without a parked build and changes nothing", async () => {
 		installed();
-		await expect(buildIn(files, "orca", paths)).rejects.toThrow("The build of orca is missing. Install it again.");
+		await expect(buildIn(files, "orca", paths)).rejects.toThrow("The build for orca is missing. Install it again.");
 		expect(files.text(`${paths.target}/main.js`)).toBe("installed");
 	});
 });

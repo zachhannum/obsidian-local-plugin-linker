@@ -13,6 +13,7 @@ import {
 	SecretComponent,
 	Setting,
 	SettingDefinitionItem,
+	setIcon,
 } from "obsidian";
 import { BratInstall, findBratInstall } from "./brat";
 import {
@@ -114,8 +115,8 @@ const SIGN_IN_SECRET = "local-linker-github";
 const BRAT_ID = "obsidian42-brat";
 
 const FOLDER_UPDATE_WARNING =
-	"BRAT updates at startup and will overwrite files in this folder. Turn off the link before you restart Obsidian.";
-const BUILD_UPDATE_WARNING = "BRAT updates at startup and will replace this build. Turn off the build before you restart Obsidian.";
+	"BRAT will overwrite this folder the next time Obsidian starts. Turn off the link before you restart.";
+const BUILD_UPDATE_WARNING = "BRAT will replace this build the next time Obsidian starts. Turn off the build before you restart.";
 
 /** A change to one of these files in a linked folder reloads that plugin. */
 const WATCHED = new Set(["main.js", "styles.css", "manifest.json"]);
@@ -167,6 +168,7 @@ export default class LocalPluginLinker extends Plugin {
 			this.settings.useToken = true;
 		}
 		this.settings.links = this.settings.links.map((l) => ({ ...l, enabled: l.enabled ?? true }));
+		await this.readBrat();
 		this.addSettingTab(new LinkerSettingTab(this.app, this));
 		this.addCommand({
 			id: "reload-linked-plugins",
@@ -223,7 +225,7 @@ export default class LocalPluginLinker extends Plugin {
 	}
 
 	private requireDesktop(): Desktop {
-		if (!this.desktop) throw new Error("Folder links work only in the desktop app.");
+		if (!this.desktop) throw new Error("Folder links are only available on desktop.");
 		return this.desktop;
 	}
 
@@ -256,13 +258,13 @@ export default class LocalPluginLinker extends Plugin {
 			await this.plugins.disablePluginAndSave(BRAT_ID);
 			this.settings.bratPaused = true;
 			await this.save();
-			new Notice("BRAT turned off, so its updates cannot overwrite a linked plugin.");
+			new Notice("Turned off BRAT so it cannot overwrite linked plugins.");
 		} else if (!pause && this.settings.bratPaused) {
 			this.settings.bratPaused = false;
 			await this.save();
 			if (!on && this.plugins.manifests[BRAT_ID]) {
 				await this.plugins.enablePluginAndSave(BRAT_ID);
-				new Notice("BRAT turned on.");
+				new Notice("Turned on BRAT.");
 			}
 		}
 	}
@@ -286,17 +288,17 @@ export default class LocalPluginLinker extends Plugin {
 		const name = this.displayName(link.id);
 		if (link.kind === "build" && old.kind !== "build") {
 			if (!this.desktop) {
-				throw new Error(`${name} has a folder link from the desktop app. Remove that link in the desktop app, then try again.`);
+				throw new Error(`${name} is linked to a folder on desktop. Remove that link on desktop, then try again.`);
 			}
 			return confirm(
 				this.app,
-				`${name} uses the linked folder ${old.source}. Replace it with the build of ${refLabel(link)}? The link is removed from the list. Your folder stays on disk.`,
+				`${name} is linked to ${old.source}. Replace the link with the build from ${refLabel(link)}? Your folder will not be changed.`,
 			);
 		}
 		if (old.kind !== "build") return true;
 		return confirm(
 			this.app,
-			`${name} uses the build of ${refLabel(old)}. Replace it with the linked folder? The build is removed from the list and deleted.`,
+			`${name} uses the build from ${refLabel(old)}. Replace it with the linked folder? The build will be deleted.`,
 		);
 	}
 
@@ -318,7 +320,7 @@ export default class LocalPluginLinker extends Plugin {
 		if (on && this.settings.pauseBrat && this.brat(link) && this.plugins.enabledPlugins.has(BRAT_ID)) {
 			await this.plugins.disablePluginAndSave(BRAT_ID);
 			this.settings.bratPaused = true;
-			new Notice("BRAT turned off, so its updates cannot overwrite a linked plugin.");
+			new Notice("Turned off BRAT so it cannot overwrite linked plugins.");
 		}
 		this.unwatch(link.id);
 		if (wasOn) await this.plugins.disablePlugin(link.id);
@@ -338,7 +340,7 @@ export default class LocalPluginLinker extends Plugin {
 			new Notice(`Switched ${name} to the installed version.`);
 			return;
 		}
-		const switched = link.kind === "build" ? `Switched ${name} to the build of ${refLabel(link)}.` : `Switched ${name} to the linked folder.`;
+		const switched = link.kind === "build" ? `Switched ${name} to the build from ${refLabel(link)}.` : `Switched ${name} to the linked folder.`;
 		if (this.brat(link)?.updatesAtStartup && this.plugins.enabledPlugins.has(BRAT_ID)) {
 			new Notice(`${switched} ${link.kind === "build" ? BUILD_UPDATE_WARNING : FOLDER_UPDATE_WARNING}`, 10000);
 		} else new Notice(switched);
@@ -387,7 +389,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	/** Signs in with GitHub's device flow. The person types a code on GitHub, so no token is copied by hand. */
 	async signIn() {
-		if (!GITHUB_CLIENT_ID) throw new Error("Sign-in to GitHub is not set up in this build. Use a token instead.");
+		if (!GITHUB_CLIENT_ID) throw new Error("GitHub sign-in is not available in this build. Use a personal access token instead.");
 		// GitHub requires a repository scope to download an artifact, and it has no read-only one.
 		const scope = this.settings.privateRepos ? "repo" : "public_repo";
 		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID, scope);
@@ -439,17 +441,17 @@ export default class LocalPluginLinker extends Plugin {
 		if (!ref) return;
 		const artifacts = await github.artifacts(repo.name, ref.sha);
 		if (artifacts.length === 0) {
-			throw new Error(`${refLabel(ref)} has no build of its newest commit. Wait for its workflow to finish, then try again.`);
+			throw new Error(`No build found for the latest commit on ${refLabel(ref)}. Wait for the workflow to finish, then try again.`);
 		}
 		const artifact =
 			chooseArtifact(artifacts, repo.artifact) ??
-			(await choose(this.app, artifacts, (a) => a.name, "Choose the artifact that holds the plugin"));
+			(await choose(this.app, artifacts, (a) => a.name, "Choose the artifact that contains the plugin"));
 		if (!artifact) return;
 		await this.install(repo, ref, artifact);
 	}
 
 	private async install(repo: Repo, ref: Ref, artifact: Artifact) {
-		const downloading = new Notice(`Downloading ${artifact.name} from ${repo.name}.`, 0);
+		const downloading = new Notice(`Downloading ${artifact.name} from ${repo.name}...`, 0);
 		const build = await this.github()
 			.download(repo.name, artifact)
 			.finally(() => downloading.hide());
@@ -472,7 +474,7 @@ export default class LocalPluginLinker extends Plugin {
 			Object.assign(old, { ...link, enabled: true });
 			await this.save();
 			await this.reload(build.id);
-			new Notice(`Switched ${this.displayName(build.id)} to the build of ${refLabel(link)}.`);
+			new Notice(`Switched ${this.displayName(build.id)} to the build from ${refLabel(link)}.`);
 			return;
 		}
 		if (!(await this.mayReplace(link))) return;
@@ -486,23 +488,23 @@ export default class LocalPluginLinker extends Plugin {
 		const name = this.displayName(link.id);
 		const ref = await github.refresh(link.repo, link);
 		if (ref.sha === link.sha) {
-			new Notice(`${name} has the newest build of ${refLabel(ref)}.`);
+			new Notice(`${name} is already up to date with ${refLabel(ref)}.`);
 			return;
 		}
 		const artifact = (await github.artifacts(link.repo, ref.sha)).find((a) => a.name === link.artifact);
 		if (!artifact) {
-			throw new Error(`${refLabel(ref)} has no ${link.artifact} build of its newest commit. Wait for its workflow to finish, then try again.`);
+			throw new Error(`No ${link.artifact} artifact found for the latest commit on ${refLabel(ref)}. Wait for the workflow to finish, then try again.`);
 		}
 		const build = await github.download(link.repo, artifact);
 		if (build.id !== link.id) {
-			throw new Error(`The newest build of ${refLabel(ref)} is the plugin ${build.id}, not ${link.id}. Install it from the repository list.`);
+			throw new Error(`The latest build from ${refLabel(ref)} contains ${build.id}, not ${link.id}. Install it from the repository list.`);
 		}
 		const { target, parked } = this.buildPaths(link.id);
 		await writeBuild(this.app.vault.adapter, link.enabled ? target : parked, build.files);
 		Object.assign(link, { title: ref.title, sha: ref.sha });
 		await this.save();
 		if (link.enabled) await this.reload(link.id);
-		new Notice(`Updated ${name} to the newest build of ${refLabel(ref)}.`);
+		new Notice(`Updated ${name} to the latest build from ${refLabel(ref)}.`);
 	}
 
 	watchAll() {
@@ -562,7 +564,7 @@ class SignInModal extends Modal {
 	onOpen() {
 		const { code } = this;
 		this.setTitle("Sign in to GitHub");
-		this.contentEl.createEl("p", { text: "Enter this code on GitHub. The sign-in finishes when GitHub accepts it." });
+		this.contentEl.createEl("p", { text: "Enter this code on GitHub to finish signing in." });
 		this.contentEl.createEl("p", { text: code.userCode, cls: "local-plugin-linker-code" });
 		new Setting(this.contentEl).addButton((b) =>
 			b
@@ -613,7 +615,7 @@ class ConfirmModal extends Modal {
 	}
 
 	onOpen() {
-		this.setTitle("Replace the link?");
+		this.setTitle("Replace link?");
 		this.contentEl.createEl("p", { text: this.message });
 		new Setting(this.contentEl)
 			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
@@ -675,20 +677,30 @@ class ChoiceModal<T> extends FuzzySuggestModal<T> {
 	}
 }
 
-function describe(link: Link, brat: BratInstall | null, paused: boolean, bratOn: boolean): DocumentFragment {
+function describe(link: Link, source: string, brat: BratInstall | null, paused: boolean, bratOn: boolean): DocumentFragment {
 	const frag = createFragment();
-	if (link.kind === "build") frag.createDiv({ text: `${link.repo} ${refLabel(link)} (${link.sha.slice(0, 7)})` });
-	else frag.createDiv({ text: link.source });
+	const row = (icon: string, text: string, mono = false) => {
+		const el = frag.createDiv({ cls: "local-plugin-linker-row" });
+		setIcon(el.createSpan({ cls: "local-plugin-linker-icon" }), icon);
+		el.createSpan({ text, cls: mono ? "local-plugin-linker-mono" : "" });
+	};
+	if (link.kind === "build") {
+		const title = frag.createDiv({ cls: "local-plugin-linker-title" });
+		if (link.pr !== undefined) {
+			title.createSpan({ text: `#${link.pr}`, cls: "local-plugin-linker-number" });
+			title.appendText(link.title);
+		} else title.appendText(link.branch);
+		row("book-marked", link.repo);
+		if (link.pr !== undefined) row("git-branch", link.branch);
+		row("git-commit-horizontal", link.sha.slice(0, 7), true);
+	} else row("folder", source, true);
 	if (!brat) return frag;
-	if (!link.enabled) {
-		frag.createDiv({ text: "Using the version installed by BRAT." });
-		return frag;
-	}
-	frag.createDiv({ text: "Overrides the version installed by BRAT." });
-	if (paused) {
-		frag.createDiv({ text: "BRAT is turned off while this link is on." });
-	} else if (bratOn && brat.updatesAtStartup) {
-		frag.createDiv({ text: link.kind === "build" ? BUILD_UPDATE_WARNING : FOLDER_UPDATE_WARNING, cls: "mod-warning" });
+	const badge = (text: string, tone: string) => frag.createDiv().createSpan({ text, cls: `local-plugin-linker-badge mod-${tone}` });
+	if (!link.enabled) badge("Using BRAT's version", "neutral");
+	else if (paused) badge("BRAT turned off while linked", "paused");
+	else badge("Overrides BRAT", "active");
+	if (link.enabled && !paused && bratOn && brat.updatesAtStartup) {
+		frag.createDiv({ text: link.kind === "build" ? BUILD_UPDATE_WARNING : FOLDER_UPDATE_WARNING, cls: "local-plugin-linker-warning mod-warning" });
 	}
 	return frag;
 }
@@ -712,7 +724,7 @@ class LinkerSettingTab extends PluginSettingTab {
 		return [
 			{
 				name: "Link plugin folder",
-				desc: "Replaces the installed version until you turn off the link.",
+				desc: "Use a plugin folder on disk in place of the installed version.",
 				visible: plugin.desktop !== null,
 				render: (setting) => {
 					const desktop = plugin.desktop;
@@ -734,13 +746,13 @@ class LinkerSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Reload on change",
-				desc: "Reload a linked plugin when its files change.",
+				desc: "Reload linked plugins when their files change.",
 				visible: plugin.desktop !== null,
 				control: { type: "toggle", key: "autoReload" },
 			},
 			{
 				name: "Turn off BRAT while linked",
-				desc: "Turn off BRAT while a link overrides a plugin it installed, so its updates cannot overwrite your folder or build. While BRAT is off, none of its plugins update.",
+				desc: "Prevents BRAT from overwriting a linked plugin. While BRAT is off, it updates none of its plugins.",
 				control: { type: "toggle", key: "pauseBrat" },
 			},
 			{
@@ -755,6 +767,7 @@ class LinkerSettingTab extends PluginSettingTab {
 					name: plugin.displayName(link.id),
 					desc: describe(
 						link,
+						link.kind === "build" ? "" : (plugin.desktop?.collapseHome(link.source) ?? link.source),
 						plugin.brat(link),
 						plugin.settings.bratPaused,
 						plugin.plugins.enabledPlugins.has(BRAT_ID),
@@ -763,7 +776,7 @@ class LinkerSettingTab extends PluginSettingTab {
 					render: (setting: Setting) => {
 						setting.addToggle((t) =>
 							t
-								.setTooltip(link.kind === "build" ? "Use this build" : "Use linked folder")
+								.setTooltip(link.kind === "build" ? "Use this build" : "Use this folder")
 								.setValue(link.enabled)
 								.onChange((on) => plugin.setEnabled(link, on).then(refresh, report)),
 						);
@@ -771,7 +784,7 @@ class LinkerSettingTab extends PluginSettingTab {
 							setting.addExtraButton((b) =>
 								b
 									.setIcon("download")
-									.setTooltip("Update to the newest build")
+									.setTooltip("Update to latest build")
 									.onClick(() => plugin.update(link).then(refresh, report)),
 							);
 						}
@@ -790,7 +803,7 @@ class LinkerSettingTab extends PluginSettingTab {
 				name: "GitHub account",
 				desc: plugin.settings.githubUser
 					? `Signed in as ${plugin.settings.githubUser}.`
-					: "Sign in to download builds from GitHub Actions. GitHub gives Local Linker read and write access to your public repositories, because it has no read-only access for artifacts.",
+					: "Sign in to download builds from GitHub Actions. GitHub has no read-only access to artifacts, so Local Linker asks for read and write access to your public repositories.",
 				visible: () => !plugin.settings.useToken,
 				render: (setting) => {
 					if (plugin.settings.githubUser) {
@@ -809,13 +822,13 @@ class LinkerSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Include private repositories",
-				desc: "Ask for access to your private repositories when you sign in. GitHub then gives Local Linker read and write access to all your repositories.",
+				desc: "Also ask for access to private repositories when you sign in. Local Linker then gets read and write access to all your repositories.",
 				visible: () => !plugin.settings.useToken && !plugin.settings.githubUser,
 				control: { type: "toggle", key: "privateRepos" },
 			},
 			{
 				name: "GitHub token",
-				desc: "A personal access token, kept in Obsidian's secret storage.",
+				desc: "A personal access token, stored in Obsidian's secret storage.",
 				visible: () => plugin.settings.useToken,
 				render: (setting) => {
 					setting
@@ -830,7 +843,7 @@ class LinkerSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Add GitHub repository",
-				desc: "A repository whose workflow uploads the plugin's main.js and manifest.json as an artifact.",
+				desc: "Its workflow must upload the plugin's main.js and manifest.json as an artifact.",
 				render: (setting) => {
 					let input = "";
 					setting
@@ -862,16 +875,16 @@ class LinkerSettingTab extends PluginSettingTab {
 				},
 				items: plugin.settings.repos.map((repo) => ({
 					name: repo.name,
-					desc: repo.artifact ? `Installs the artifact ${repo.artifact}.` : "",
+					desc: repo.artifact ? `Artifact: ${repo.artifact}` : "",
 					render: (setting: Setting) => {
 						setting.addButton((b) =>
-							b.setButtonText("Install a build").onClick(() => plugin.chooseBuild(repo).then(refresh, report)),
+							b.setButtonText("Install build").onClick(() => plugin.chooseBuild(repo).then(refresh, report)),
 						);
 						if (repo.artifact) {
 							setting.addExtraButton((b) =>
 								b
 									.setIcon("rotate-ccw")
-									.setTooltip("Choose the artifact again next time")
+									.setTooltip("Ask for the artifact next time")
 									.onClick(() => {
 										delete repo.artifact;
 										plugin.save().then(refresh, report);

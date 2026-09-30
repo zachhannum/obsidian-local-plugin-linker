@@ -38,9 +38,9 @@ export async function writeBuild(files: Files, dir: string, build: Record<string
  */
 export async function buildIn(files: Files, id: string, paths: BuildPaths) {
 	const { target, stash, parked } = paths;
-	if (!(await files.exists(parked))) throw new Error(`The build of ${id} is missing. Install it again.`);
+	if (!(await files.exists(parked))) throw new Error(`The build for ${id} is missing. Install it again.`);
 	if (await files.exists(target)) {
-		if (await files.exists(stash)) throw new Error(`Cannot turn on the build. A saved version of ${id} already exists in ${stash}.`);
+		if (await files.exists(stash)) throw new Error(`Cannot turn on the build. A backup of ${id} already exists in ${stash}.`);
 		await mkdirs(files, parent(stash));
 		await files.rename(target, stash);
 		const data = `${stash}/data.json`;
