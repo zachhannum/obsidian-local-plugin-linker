@@ -3,8 +3,8 @@
 	"name": "Local Linker",
 	"version": "0.4.0",
 	"minAppVersion": "1.13.0",
-	"description": "Link plugin folders on disk into the vault, and reload the plugins when they rebuild.",
+	"description": "Link plugin folders into the vault and reload them when they rebuild, or install builds of pull requests and branches from GitHub.",
 	"author": "Zach Hannum",
-	"isDesktopOnly": true,
+	"isDesktopOnly": false,
 	"authorUrl": "https://github.com/zachhannum"
 }

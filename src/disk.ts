@@ -6,13 +6,19 @@ export function expandHome(p: string): string {
 	return p.replace(/^~(?=$|[\\/])/, os.homedir());
 }
 
+export function collapseHome(p: string): string {
+	const home = os.homedir();
+	if (p === home) return "~";
+	return p.startsWith(home + path.sep) ? `~${p.slice(home.length)}` : p;
+}
+
 /**
  * Reads the plugin id from a folder's manifest. The error message is shown to the user as is.
  * The id is one folder name, so a link never reaches outside the plugins folder.
  */
 export function readPluginId(folder: string): string {
 	const manifestPath = path.join(folder, "manifest.json");
-	if (!fs.existsSync(manifestPath)) throw new Error(`Not a plugin folder: manifest.json not found in ${folder}`);
+	if (!fs.existsSync(manifestPath)) throw new Error(`${folder} is not a plugin folder. It has no manifest.json.`);
 	const { id } = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { id?: unknown };
 	if (typeof id !== "string" || id === "") throw new Error("manifest.json is missing an id.");
 	if (/[\\/]/.test(id) || id === "." || id === "..") {
@@ -29,7 +35,7 @@ export function linkIn(id: string, source: string, target: string, stash: string
 	const existing = lstatOrNull(target);
 	if (existing?.isSymbolicLink()) fs.unlinkSync(target);
 	else if (existing) {
-		if (fs.existsSync(stash)) throw new Error(`Cannot turn on the link. A saved version of ${id} already exists in ${stash}.`);
+		if (fs.existsSync(stash)) throw new Error(`Cannot turn on the link. A backup of ${id} already exists in ${stash}.`);
 		fs.mkdirSync(path.dirname(stash), { recursive: true });
 		fs.renameSync(target, stash);
 	}
@@ -84,5 +90,25 @@ function isDir(parent: string, e: fs.Dirent): boolean {
 		return fs.statSync(path.join(parent, e.name)).isDirectory();
 	} catch {
 		return false;
+	}
+}
+
+/** The owner/name of every GitHub remote of a git checkout, lower case. A worktree reads its main checkout's config. */
+export function githubRemotes(source: string): string[] {
+	let gitDir = path.join(source, ".git");
+	try {
+		if (fs.statSync(gitDir).isFile()) {
+			const pointer = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(gitDir, "utf8"))?.[1]?.trim();
+			if (!pointer) return [];
+			gitDir = path.resolve(source, pointer);
+			const common = path.join(gitDir, "commondir");
+			if (fs.existsSync(common)) gitDir = path.resolve(gitDir, fs.readFileSync(common, "utf8").trim());
+		}
+		const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
+		return [...config.matchAll(/url\s*=\s*\S*github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\s*$/gm)].map((m) =>
+			(m[1] ?? "").toLowerCase(),
+		);
+	} catch {
+		return [];
 	}
 }

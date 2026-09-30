@@ -6,23 +6,35 @@ quick fix waits for its own PR.
 
 ## Project shape
 
-- One Obsidian plugin, desktop only. esbuild bundles `src/main.ts` into
-  a single `main.js` beside `manifest.json` and `styles.css`. `npm run
-  dev` watches.
+- One Obsidian plugin for desktop and mobile. esbuild bundles
+  `src/main.ts` into a single `main.js` beside `manifest.json` and
+  `styles.css`. `npm run dev` watches.
+- A link is a folder link (desktop only) or a GitHub build (desktop and
+  mobile).
 - `src/main.ts` holds the plugin, the link lifecycle and the settings
-  tab. `src/brat.ts` finds a BRAT install for a link and never touches
-  Obsidian. `src/disk.ts` does the disk work of a link and never
-  touches Obsidian. `src/folder-suggest.ts` suggests folders on disk.
+  tab. `src/brat.ts` finds a BRAT install for a link. `src/disk.ts`
+  does the disk work of a folder link. `src/github.ts` talks to GitHub
+  and reads an artifact. `src/install.ts` moves a build in and out of
+  the plugins folder. `brat.ts`, `disk.ts`, `github.ts` and
+  `install.ts` never touch Obsidian. `src/desktop.ts` gathers the
+  Node-only code, and `src/folder-suggest.ts` suggests folders on disk.
+  `src/repo-suggest.ts` suggests GitHub repositories.
 - Obsidian's private plugin manager is reached through the one
   `PluginManager` interface in `main.ts`. A new private call is added
   there, so the whole private surface stays in one place.
-- Node's `fs` and `path` are the only way to disk. The vault adapter
-  cannot reach folders outside the vault, and links live outside it.
+- Only `src/main.ts` loads `src/desktop.ts`, only on desktop, and
+  only with `import()`. A static import of Node code breaks the plugin
+  on mobile.
+- A folder link reaches disk with Node's `fs` and `path`, because the
+  vault adapter cannot reach folders outside the vault. A build uses
+  the vault adapter, and GitHub is reached with `requestUrl`.
+- The GitHub token lives in Obsidian's secret storage. The settings
+  keep only its name.
 
 ## Invariants
 
-- The linker never deletes a real folder. It removes only a symlink it
-  made, and it moves an installed version into `stash/` rather than
+- The linker deletes only a symlink it made and a build it
+  downloaded. It moves an installed version into `stash/` rather than
   over it.
 - Turning a link off puts the stashed version back before any plugin is
   turned on again.
@@ -71,8 +83,8 @@ quick fix waits for its own PR.
   rejects both.
 - If the code uses an API newer than `minAppVersion`, raise
   `minAppVersion`.
-- The README's disclosures stay true: it reads folders outside the vault
-  and uses Obsidian's internal plugin API.
+- The README's disclosures stay true: it reads folders outside the
+  vault, connects to GitHub and uses Obsidian's internal plugin API.
 
 ## PRs and commits
 

@@ -1,0 +1,363 @@
+import { unzipSync } from "fflate";
+
+export interface HttpResponse {
+	status: number;
+	json(): unknown;
+	bytes(): ArrayBuffer;
+}
+
+/** A GET request. It resolves for every status, and it follows redirects. */
+export type Get = (url: string, headers: Record<string, string>) => Promise<HttpResponse>;
+
+/** A POST of a form. It resolves for every status. */
+export type Post = (url: string, form: Record<string, string>) => Promise<HttpResponse>;
+
+/** Waits `ms`. It resolves false if the person cancels the wait. */
+export type Wait = (ms: number) => Promise<boolean>;
+
+/** A code that the person types on GitHub to sign in. */
+export interface DeviceCode {
+	deviceCode: string;
+	userCode: string;
+	verificationUri: string;
+	/** Seconds between polls. */
+	interval: number;
+}
+
+/** The tokens from a sign-in. */
+export interface Grant {
+	token: string;
+	/** Empty when the token does not expire. */
+	refreshToken: string;
+	/** Milliseconds since the epoch. 0 when the token does not expire. */
+	expiresAt: number;
+}
+
+/** An open pull request or a branch, at its newest commit. */
+export interface Ref {
+	/** A pull request has a number. A branch has none. */
+	pr?: number;
+	/** The branch name. For a pull request, its head branch. */
+	branch: string;
+	/** The pull request title, or the branch name. */
+	title: string;
+	sha: string;
+	/** A recent successful workflow run exists for `sha`. Older runs can exist when this is false. */
+	built: boolean;
+}
+
+export interface Artifact {
+	id: number;
+	name: string;
+}
+
+export interface PluginBuild {
+	id: string;
+	name: string;
+	/** The file names are main.js, manifest.json and, if the build has one, styles.css. */
+	files: Record<string, Uint8Array>;
+}
+
+/** The plugin files a build can hold. main.js and manifest.json are required. */
+export const PLUGIN_FILES = ["main.js", "manifest.json", "styles.css"];
+
+const API = "https://api.github.com";
+
+/** Reads owner/name from a repo name or a GitHub URL. */
+export function parseRepo(input: string): string {
+	const path = input.trim().replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\//i, "");
+	const match = /^([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/#?].*)?$/.exec(path);
+	if (!match) throw new Error(`"${input}" is not a valid repository. Use the format owner/name.`);
+	return `${match[1]}/${match[2]}`;
+}
+
+/** The owner in a partly typed repo name, once a slash follows it. */
+export function typedOwner(query: string): string | undefined {
+	const slash = query.trim().indexOf("/");
+	return slash > 0 ? query.trim().slice(0, slash) : undefined;
+}
+
+/** The names that contain `query`, without case or repeats. A name that starts with it, or whose repo part does, comes first. */
+export function matchRepos(names: string[], query: string): string[] {
+	const q = query.trim().toLowerCase();
+	const seen = new Set<string>();
+	const first: string[] = [];
+	const rest: string[] = [];
+	for (const name of names) {
+		const lower = name.toLowerCase();
+		if (seen.has(lower) || !lower.includes(q)) continue;
+		seen.add(lower);
+		(lower.startsWith(q) || lower.split("/")[1]?.startsWith(q) ? first : rest).push(name);
+	}
+	return [...first, ...rest];
+}
+
+export function refLabel(ref: Pick<Ref, "pr" | "branch" | "title">): string {
+	return ref.pr === undefined ? ref.branch : `#${ref.pr} ${ref.title}`;
+}
+
+export class GitHub {
+	/**
+	 * `getZip` downloads an artifact. GitHub redirects it to storage that refuses a request that still
+	 * carries the GitHub token, so `getZip` must drop the Authorization header on a redirect to another host.
+	 */
+	constructor(
+		private get: Get,
+		private token: string | null,
+		private getZip: Get = get,
+	) {}
+
+	/** Open pull requests, newest update first, then branches. */
+	async refs(repo: string): Promise<Ref[]> {
+		const [pulls, branches, runs] = await Promise.all([
+			this.api(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`, repo, "list the pull requests"),
+			this.api(`/repos/${repo}/branches?per_page=100`, repo, "list the branches"),
+			this.api(`/repos/${repo}/actions/runs?status=success&per_page=100`, repo, "list the workflow runs"),
+		]);
+		const built = new Set(((runs as RunList).workflow_runs ?? []).map((r) => r.head_sha));
+		return [
+			...(pulls as Pull[]).map((p) => pullRef(p, built)),
+			...(branches as Branch[]).map((b) => branchRef(b, built)),
+		];
+	}
+
+	/** The newest commit of a pull request or branch that `ref` names. */
+	async refresh(repo: string, ref: Pick<Ref, "pr" | "branch">): Promise<Ref> {
+		if (ref.pr !== undefined) return pullRef((await this.api(`/repos/${repo}/pulls/${ref.pr}`, repo, "read the pull request")) as Pull, new Set());
+		return branchRef((await this.api(`/repos/${repo}/branches/${encodeURIComponent(ref.branch)}`, repo, "read the branch")) as Branch, new Set());
+	}
+
+	/** The artifacts of the successful runs for a commit that have not expired. For a repeated name, the newest wins. */
+	async artifacts(repo: string, sha: string): Promise<Artifact[]> {
+		const runs = (await this.api(`/repos/${repo}/actions/runs?head_sha=${sha}&status=success&per_page=20`, repo, "list the workflow runs")) as RunList;
+		const byName = new Map<string, Artifact & { created: string }>();
+		for (const run of runs.workflow_runs ?? []) {
+			const list = (await this.api(`/repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`, repo, "list the artifacts")) as ArtifactList;
+			for (const a of list.artifacts ?? []) {
+				if (a.expired) continue;
+				const old = byName.get(a.name);
+				if (!old || a.created_at > old.created) byName.set(a.name, { id: a.id, name: a.name, created: a.created_at });
+			}
+		}
+		return [...byName.values()].map(({ id, name }) => ({ id, name }));
+	}
+
+	/** The login of the token's owner. */
+	async user(): Promise<string> {
+		const user = (await this.api("/user", "your account", "read your account")) as { login: string };
+		return user.login;
+	}
+
+	/** Returns the repo's name as GitHub spells it. Throws if GitHub cannot find the repo or it has no workflow. */
+	async repo(name: string): Promise<string> {
+		const response = await this.get(`${API}/repos/${name}`, this.headers());
+		if (response.status === 404) {
+			throw new Error(`GitHub cannot find ${name}. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it.`);
+		}
+		check(response, name, "read the repository");
+		const fullName = (response.json() as { full_name: string }).full_name;
+		const workflows = (await this.api(`/repos/${fullName}/actions/workflows?per_page=1`, fullName, "list the workflows")) as { total_count?: number };
+		if (!workflows.total_count) {
+			throw new Error(`${fullName} has no GitHub Actions workflow. Add one that uploads the plugin's main.js and manifest.json as an artifact.`);
+		}
+		return fullName;
+	}
+
+	/**
+	 * With an owner, the owner's public repos. Without one, the repos the token can read, or none without a token.
+	 * Recently pushed repos come first.
+	 */
+	async repos(owner?: string): Promise<string[]> {
+		if (!owner && !this.token) return [];
+		const route = owner ? `/users/${encodeURIComponent(owner)}/repos?sort=pushed&per_page=100` : "/user/repos?sort=pushed&per_page=100";
+		const list = (await this.api(route, owner || "your account", "list the repositories")) as { full_name: string }[];
+		return list.map((r) => r.full_name);
+	}
+
+	/** GitHub requires a token to download an artifact, even from a public repo. */
+	async download(repo: string, artifact: Artifact): Promise<PluginBuild> {
+		if (!this.token) throw new Error("Sign in to GitHub in Local Linker settings to download a build.");
+		const response = await this.getZip(`${API}/repos/${repo}/actions/artifacts/${artifact.id}/zip`, this.headers());
+		check(response, repo, "download the build");
+		return readPluginZip(response.bytes(), artifact.name);
+	}
+
+	private async api(route: string, repo: string, step: string): Promise<unknown> {
+		const response = await this.get(API + route, this.headers());
+		check(response, repo, step);
+		return response.json();
+	}
+
+	private headers(): Record<string, string> {
+		const headers: Record<string, string> = {
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		};
+		if (this.token) headers.Authorization = `Bearer ${this.token}`;
+		return headers;
+	}
+}
+
+/** Picks the artifact to install without asking: the one remembered for the repo, else the only one. */
+export function chooseArtifact(artifacts: Artifact[], remembered: string | undefined): Artifact | null {
+	return artifacts.find((a) => a.name === remembered) ?? (artifacts.length === 1 ? (artifacts[0] ?? null) : null);
+}
+
+/** Finds the plugin in an artifact zip. The shallowest manifest.json marks the plugin folder, at any depth. */
+export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBuild {
+	let entries: Record<string, Uint8Array>;
+	try {
+		entries = unzipSync(new Uint8Array(zip));
+	} catch {
+		throw new Error(`The artifact ${artifactName} is not a zip file. Try downloading it again.`);
+	}
+	const manifestPath = Object.keys(entries)
+		.filter((p) => p === "manifest.json" || p.endsWith("/manifest.json"))
+		.sort((a, b) => a.split("/").length - b.split("/").length)[0];
+	if (manifestPath === undefined) {
+		throw new Error(`The artifact ${artifactName} does not contain a manifest.json. Choose the artifact that contains the plugin.`);
+	}
+	const dir = manifestPath.slice(0, -"manifest.json".length);
+	const files: Record<string, Uint8Array> = {};
+	for (const name of PLUGIN_FILES) {
+		const data = entries[dir + name];
+		if (data) files[name] = data;
+	}
+	if (!files["main.js"]) throw new Error(`The artifact ${artifactName} has no main.js next to its manifest.json.`);
+	let manifest: { id?: unknown; name?: unknown };
+	try {
+		manifest = JSON.parse(new TextDecoder().decode(files["manifest.json"])) as typeof manifest;
+	} catch {
+		throw new Error(`The manifest.json in the artifact ${artifactName} is not valid JSON.`);
+	}
+	const { id } = manifest;
+	if (typeof id !== "string" || id === "" || /[\\/]/.test(id) || id === "." || id === "..") {
+		throw new Error(`The manifest.json in the artifact ${artifactName} has no valid id.`);
+	}
+	return { id, name: typeof manifest.name === "string" ? manifest.name : id, files };
+}
+
+/** Starts GitHub's device flow. A GitHub App takes its access from its permissions, not from a scope. */
+export async function requestDeviceCode(post: Post, clientId: string): Promise<DeviceCode> {
+	const body = (await post("https://github.com/login/device/code", { client_id: clientId })).json() as {
+		device_code?: string;
+		user_code?: string;
+		verification_uri?: string;
+		interval?: number;
+		error_description?: string;
+	};
+	if (!body.device_code || !body.user_code || !body.verification_uri) {
+		throw new Error(`GitHub did not start the sign-in: ${body.error_description ?? "no code"}. Try again later.`);
+	}
+	return {
+		deviceCode: body.device_code,
+		userCode: body.user_code,
+		verificationUri: body.verification_uri,
+		interval: body.interval ?? 5,
+	};
+}
+
+interface TokenBody {
+	access_token?: string;
+	refresh_token?: string;
+	expires_in?: number;
+	error?: string;
+	error_description?: string;
+	interval?: number;
+}
+
+function toGrant(token: string, body: TokenBody, now: number): Grant {
+	return { token, refreshToken: body.refresh_token ?? "", expiresAt: body.expires_in ? now + body.expires_in * 1000 : 0 };
+}
+
+/** Polls until the person enters the code on GitHub. It resolves null if the wait is canceled. */
+export async function waitForToken(post: Post, clientId: string, code: DeviceCode, wait: Wait, now = Date.now): Promise<Grant | null> {
+	let interval = code.interval;
+	for (;;) {
+		if (!(await wait(interval * 1000))) return null;
+		const body = (
+			await post("https://github.com/login/oauth/access_token", {
+				client_id: clientId,
+				device_code: code.deviceCode,
+				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+			})
+		).json() as TokenBody;
+		if (body.access_token) return toGrant(body.access_token, body, now());
+		if (body.error === "authorization_pending") continue;
+		if (body.error === "slow_down") {
+			interval = body.interval ?? interval + 5;
+			continue;
+		}
+		if (body.error === "expired_token") throw new Error("The sign-in code expired. Sign in again.");
+		if (body.error === "access_denied") throw new Error("You canceled the sign-in on GitHub.");
+		throw new Error(`GitHub sign-in failed: ${body.error_description ?? body.error ?? "no token"}. Try again later.`);
+	}
+}
+
+/** Trades a refresh token for a new grant. A token from the device flow renews without the client secret. */
+export async function refreshGrant(post: Post, clientId: string, refreshToken: string, now = Date.now): Promise<Grant> {
+	const body = (
+		await post("https://github.com/login/oauth/access_token", {
+			client_id: clientId,
+			grant_type: "refresh_token",
+			refresh_token: refreshToken,
+		})
+	).json() as TokenBody;
+	if (body.access_token) return toGrant(body.access_token, body, now());
+	throw new Error(`GitHub did not renew the sign-in: ${body.error_description ?? body.error ?? "no token"}. Sign in again in Local Linker settings.`);
+}
+
+/** Throws for an error status. `step` names the request, as in "GitHub refused to <step>". */
+function check(response: HttpResponse, repo: string, step: string) {
+	const { status } = response;
+	if (status < 400) return;
+	const reason = errorMessage(response);
+	const says = reason ? ` GitHub says: ${reason.replace(/\.?$/, ".")}` : "";
+	if (status === 401) throw new Error(`GitHub rejected the token.${says} Sign in again in Local Linker settings.`);
+	if (status === 429 || /rate limit/i.test(reason)) {
+		throw new Error("GitHub rate limit reached. Sign in, or try again later.");
+	}
+	if (status === 403) throw new Error(`GitHub refused to ${step} of ${repo}.${says} Sign in again, or use a token that can read ${repo}.`);
+	if (status === 404) {
+		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it.`);
+	}
+	if (status === 410) throw new Error("This build has expired on GitHub. Rerun the workflow, then install again.");
+	throw new Error(`GitHub returned status ${status} when it tried to ${step}.${says} Try again later.`);
+}
+
+/** The message in GitHub's error body, or an empty string. */
+function errorMessage(response: HttpResponse): string {
+	try {
+		const { message } = response.json() as { message?: unknown };
+		return typeof message === "string" ? message : "";
+	} catch {
+		return "";
+	}
+}
+
+interface Pull {
+	number: number;
+	title: string;
+	head: { ref: string; sha: string };
+}
+
+interface Branch {
+	name: string;
+	commit: { sha: string };
+}
+
+interface RunList {
+	workflow_runs?: { id: number; head_sha: string }[];
+}
+
+interface ArtifactList {
+	artifacts?: { id: number; name: string; expired: boolean; created_at: string }[];
+}
+
+function pullRef(p: Pull, built: Set<string>): Ref {
+	return { pr: p.number, branch: p.head.ref, title: p.title, sha: p.head.sha, built: built.has(p.head.sha) };
+}
+
+function branchRef(b: Branch, built: Set<string>): Ref {
+	return { branch: b.name, title: b.name, sha: b.commit.sha, built: built.has(b.commit.sha) };
+}
