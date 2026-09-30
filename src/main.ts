@@ -1,9 +1,23 @@
-import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem } from "obsidian";
-import * as fs from "fs";
-import * as path from "path";
+import {
+	App,
+	FileSystemAdapter,
+	FuzzyMatch,
+	FuzzySuggestModal,
+	normalizePath,
+	Notice,
+	Platform,
+	Plugin,
+	PluginSettingTab,
+	requestUrl,
+	SecretComponent,
+	Setting,
+	SettingDefinitionItem,
+} from "obsidian";
 import { BratInstall, findBratInstall } from "./brat";
-import { expandHome, linkIn, linkOut, readPluginId } from "./disk";
-import { FolderSuggest } from "./folder-suggest";
+import { Artifact, chooseArtifact, Get, GitHub, parseRepo, Ref, refLabel } from "./github";
+import { buildIn, BuildPaths, buildOut, writeBuild } from "./install";
+
+type Desktop = typeof import("./desktop");
 
 /** The slice of Obsidian's private plugin manager this plugin calls. It is not in the public typings. */
 interface PluginManager {
@@ -16,34 +30,73 @@ interface PluginManager {
 	enablePluginAndSave(id: string): Promise<boolean>;
 }
 
-interface Link {
+interface FolderLink {
+	/** Missing in data saved before builds existed. */
+	kind?: "folder";
 	id: string;
 	source: string;
 	/** Off means the installed copy, from BRAT or the store, sits at the plugin's folder instead. */
 	enabled: boolean;
 }
 
+interface BuildLink {
+	kind: "build";
+	id: string;
+	/** owner/name */
+	repo: string;
+	pr?: number;
+	branch: string;
+	title: string;
+	/** The commit the installed build comes from. */
+	sha: string;
+	artifact: string;
+	enabled: boolean;
+}
+
+type Link = FolderLink | BuildLink;
+
+interface Repo {
+	/** owner/name */
+	name: string;
+	/** The artifact that held the plugin last time. The next install takes it without asking. */
+	artifact?: string;
+}
+
 interface Settings {
 	links: Link[];
+	repos: Repo[];
+	/** The name of the token in Obsidian's secret storage, never the token itself. */
+	tokenSecret: string;
 	autoReload: boolean;
-	/** Turn BRAT off while any link shadows one of its installs, so no BRAT update writes into a linked folder. */
+	/** Turn BRAT off while any link overrides one of its installs, so no BRAT update writes over a link. */
 	pauseBrat: boolean;
 	/** The linker turned BRAT off, and it turns BRAT back on only in that case. */
 	bratPaused: boolean;
 }
 
-const DEFAULTS: Settings = { links: [], autoReload: true, pauseBrat: false, bratPaused: false };
+const DEFAULTS: Settings = { links: [], repos: [], tokenSecret: "", autoReload: true, pauseBrat: false, bratPaused: false };
 
 const BRAT_ID = "obsidian42-brat";
 
-const UPDATE_WARNING = "BRAT updates at startup and will overwrite files in this folder. Turn off the link before you restart Obsidian.";
+const FOLDER_UPDATE_WARNING =
+	"BRAT updates at startup and will overwrite files in this folder. Turn off the link before you restart Obsidian.";
+const BUILD_UPDATE_WARNING = "BRAT updates at startup and will replace this build. Turn off the build before you restart Obsidian.";
 
 /** A change to one of these files in a linked folder reloads that plugin. */
 const WATCHED = new Set(["main.js", "styles.css", "manifest.json"]);
 
+const get: Get = async (url, headers) => {
+	const response = await requestUrl({ url, headers, throw: false });
+	return { status: response.status, json: () => response.json as unknown, bytes: () => response.arrayBuffer };
+};
+
 export default class LocalPluginLinker extends Plugin {
 	settings: Settings = DEFAULTS;
-	private watchers = new Map<string, fs.FSWatcher>();
+	/** Node's file system. Null on mobile, where folder links do not work. */
+	desktop: Desktop | null = null;
+	/** The text of BRAT's data.json, read again before each use that can change plugin state. */
+	private bratData: string | null = null;
+	private watchers = new Map<string, { close(): void }>();
 	private timers = new Map<string, number>();
 
 	get plugins(): PluginManager {
@@ -51,6 +104,8 @@ export default class LocalPluginLinker extends Plugin {
 	}
 
 	async onload() {
+		// Mobile has no Node, so the module that needs it loads only on desktop.
+		if (Platform.isDesktopApp) this.desktop = await import("./desktop");
 		const data = (await this.loadData()) as Partial<Settings> | null;
 		this.settings = { ...DEFAULTS, ...data };
 		this.settings.links = this.settings.links.map((l) => ({ ...l, enabled: l.enabled ?? true }));
@@ -60,6 +115,13 @@ export default class LocalPluginLinker extends Plugin {
 			name: "Reload linked plugins",
 			callback: async () => {
 				for (const link of this.active()) await this.reload(link.id);
+			},
+		});
+		this.addCommand({
+			id: "update-builds",
+			name: "Update GitHub builds",
+			callback: async () => {
+				for (const link of this.settings.links) if (link.kind === "build") await this.update(link).catch(report);
 			},
 		});
 		this.app.workspace.onLayoutReady(() => {
@@ -76,40 +138,67 @@ export default class LocalPluginLinker extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	active(): Link[] {
-		return this.settings.links.filter((l) => l.enabled);
+	/** The links this device can use. A folder link needs the desktop app. */
+	usable(): Link[] {
+		return this.settings.links.filter((l) => l.kind === "build" || this.desktop);
 	}
 
-	private vaultBase(): string {
-		const adapter = this.app.vault.adapter;
-		if (!(adapter instanceof FileSystemAdapter)) throw new Error("This vault is not stored on this computer.");
-		return adapter.getBasePath();
+	active(): Link[] {
+		return this.usable().filter((l) => l.enabled);
 	}
 
 	private pluginsDir(): string {
-		return path.join(this.vaultBase(), this.app.vault.configDir, "plugins");
+		return normalizePath(`${this.app.vault.configDir}/plugins`);
 	}
 
-	private target(id: string): string {
-		return path.join(this.pluginsDir(), id);
+	private buildPaths(id: string): BuildPaths {
+		return {
+			target: `${this.pluginsDir()}/${id}`,
+			stash: this.stash(id),
+			parked: normalizePath(`${this.manifest.dir ?? ""}/builds/${id}`),
+		};
+	}
+
+	/** An installed copy moves here while a link covers its folder. */
+	private stash(id: string): string {
+		return normalizePath(`${this.manifest.dir ?? ""}/stash/${id}`);
+	}
+
+	private requireDesktop(): Desktop {
+		if (!this.desktop) throw new Error("Folder links work only in the desktop app.");
+		return this.desktop;
+	}
+
+	/** The absolute path of a vault path. Only a folder link needs one. */
+	private onDisk(vaultPath: string): string {
+		const desktop = this.requireDesktop();
+		const adapter = this.app.vault.adapter;
+		if (!(adapter instanceof FileSystemAdapter)) throw new Error("This vault is not stored on this computer.");
+		return desktop.inVault(adapter.getBasePath(), vaultPath);
 	}
 
 	brat(link: Link): BratInstall | null {
-		return findBratInstall(this.pluginsDir(), link.id, link.source);
+		const repos = link.kind === "build" ? [link.repo] : (this.desktop?.githubRemotes(link.source) ?? []);
+		return findBratInstall(this.bratData, link.id, repos);
+	}
+
+	private async readBrat() {
+		this.bratData = await this.app.vault.adapter.read(`${this.pluginsDir()}/${BRAT_ID}/data.json`).catch(() => null);
 	}
 
 	/**
-	 * Turns BRAT off while the setting is on and a link shadows a BRAT install, and back on after.
+	 * Turns BRAT off while the setting is on and a link overrides a BRAT install, and back on after.
 	 * The change is saved, because BRAT updates as it loads, before the linker could stop it.
 	 */
 	async syncBrat() {
+		await this.readBrat();
 		const pause = this.settings.pauseBrat && this.active().some((l) => this.brat(l));
 		const on = this.plugins.enabledPlugins.has(BRAT_ID);
 		if (pause && on) {
 			await this.plugins.disablePluginAndSave(BRAT_ID);
 			this.settings.bratPaused = true;
 			await this.save();
-			new Notice("BRAT turned off, so its updates cannot overwrite a linked folder.");
+			new Notice("BRAT turned off, so its updates cannot overwrite a linked plugin.");
 		} else if (!pause && this.settings.bratPaused) {
 			this.settings.bratPaused = false;
 			await this.save();
@@ -120,39 +209,41 @@ export default class LocalPluginLinker extends Plugin {
 		}
 	}
 
-	/** An installed copy moves here while a link covers its folder. */
-	private stash(id: string): string {
-		return path.join(this.vaultBase(), this.manifest.dir ?? "", "stash", id);
+	async add(input: string) {
+		const desktop = this.requireDesktop();
+		const source = desktop.resolveFolder(input);
+		const id = desktop.readPluginId(source);
+		if (id === this.manifest.id) throw new Error("Local Linker cannot link itself.");
+		await this.replace({ id, source, enabled: false });
 	}
 
-	async add(input: string) {
-		const source = path.resolve(expandHome(input.trim()));
-		const id = readPluginId(source);
-		if (id === this.manifest.id) throw new Error("Local Linker cannot link itself.");
-
-		const old = this.settings.links.find((l) => l.id === id);
-		if (old?.enabled) await this.setEnabled(old, false);
-		this.settings.links = this.settings.links.filter((l) => l.id !== id);
-		const link: Link = { id, source, enabled: false };
+	/** Puts `link` in the list in place of any link for the same plugin, then turns it on. */
+	private async replace(link: Link) {
+		const old = this.settings.links.find((l) => l.id === link.id);
+		if (old && old.kind !== "build" && !this.desktop) {
+			throw new Error(`${this.displayName(link.id)} has a folder link from the desktop app. Remove that link in the desktop app, then try again.`);
+		}
+		// A new build was already written over the parked one, so only a folder link removes an old build.
+		if (old?.kind === "build" && link.kind !== "build") await this.remove(old);
+		else if (old?.enabled) await this.setEnabled(old, false);
+		this.settings.links = this.settings.links.filter((l) => l.id !== link.id);
 		this.settings.links.push(link);
 		await this.setEnabled(link, true);
 	}
 
 	/** Swaps the link in or out. The plugin stays on or off as it was, except a link turned on is always on. */
 	async setEnabled(link: Link, on: boolean) {
-		const target = this.target(link.id);
-		const stash = this.stash(link.id);
+		await this.readBrat();
 		const wasOn = this.plugins.enabledPlugins.has(link.id);
 		if (on && this.settings.pauseBrat && this.brat(link) && this.plugins.enabledPlugins.has(BRAT_ID)) {
 			await this.plugins.disablePluginAndSave(BRAT_ID);
 			this.settings.bratPaused = true;
-			new Notice("BRAT turned off, so its updates cannot overwrite a linked folder.");
+			new Notice("BRAT turned off, so its updates cannot overwrite a linked plugin.");
 		}
 		this.unwatch(link.id);
 		if (wasOn) await this.plugins.disablePlugin(link.id);
 		try {
-			if (on) linkIn(link.id, link.source, target, stash);
-			else linkOut(target, stash);
+			await this.swap(link, on);
 			link.enabled = on;
 			await this.save();
 		} finally {
@@ -162,12 +253,29 @@ export default class LocalPluginLinker extends Plugin {
 			if (link.enabled) this.watch(link);
 		}
 		await this.syncBrat();
-		const brat = this.brat(link);
 		const name = this.displayName(link.id);
-		if (!on) new Notice(`Switched ${name} to the installed version.`);
-		else if (brat?.updatesAtStartup && this.plugins.enabledPlugins.has(BRAT_ID)) {
-			new Notice(`Switched ${name} to the linked folder. ${UPDATE_WARNING}`, 10000);
-		} else new Notice(`Switched ${name} to the linked folder.`);
+		if (!on) {
+			new Notice(`Switched ${name} to the installed version.`);
+			return;
+		}
+		const switched = link.kind === "build" ? `Switched ${name} to the build of ${refLabel(link)}.` : `Switched ${name} to the linked folder.`;
+		if (this.brat(link)?.updatesAtStartup && this.plugins.enabledPlugins.has(BRAT_ID)) {
+			new Notice(`${switched} ${link.kind === "build" ? BUILD_UPDATE_WARNING : FOLDER_UPDATE_WARNING}`, 10000);
+		} else new Notice(switched);
+	}
+
+	private async swap(link: Link, on: boolean) {
+		if (link.kind === "build") {
+			const files = this.app.vault.adapter;
+			if (on) await buildIn(files, link.id, this.buildPaths(link.id));
+			else await buildOut(files, link.id, this.buildPaths(link.id));
+			return;
+		}
+		const desktop = this.requireDesktop();
+		const target = this.onDisk(`${this.pluginsDir()}/${link.id}`);
+		const stash = this.onDisk(this.stash(link.id));
+		if (on) desktop.linkIn(link.id, link.source, target, stash);
+		else desktop.linkOut(target, stash);
 	}
 
 	displayName(id: string): string {
@@ -176,6 +284,10 @@ export default class LocalPluginLinker extends Plugin {
 
 	async remove(link: Link) {
 		if (link.enabled) await this.setEnabled(link, false);
+		if (link.kind === "build") {
+			const { parked } = this.buildPaths(link.id);
+			if (await this.app.vault.adapter.exists(parked)) await this.app.vault.adapter.rmdir(parked, true);
+		}
 		this.settings.links = this.settings.links.filter((l) => l !== link);
 		await this.save();
 	}
@@ -188,17 +300,104 @@ export default class LocalPluginLinker extends Plugin {
 		new Notice(`Reloaded ${this.displayName(id)}.`);
 	}
 
+	github(): GitHub {
+		const token = this.settings.tokenSecret ? this.app.secretStorage.getSecret(this.settings.tokenSecret) : null;
+		return new GitHub(get, token);
+	}
+
+	async addRepo(name: string) {
+		if (this.settings.repos.some((r) => r.name.toLowerCase() === name.toLowerCase())) return;
+		this.settings.repos.push({ name });
+		await this.save();
+	}
+
+	/** Asks for a pull request or branch, and for an artifact if the choice is not clear, then installs the build. */
+	async chooseBuild(repo: Repo) {
+		const github = this.github();
+		const refs = await github.refs(repo.name);
+		if (refs.length === 0) throw new Error(`${repo.name} has no open pull requests or branches.`);
+		const ref = await choose(this.app, refs, refLabel, "Choose a pull request or branch", (r) =>
+			[r.pr === undefined ? "" : r.branch, r.built ? "" : "no recent build"].filter(Boolean).join(" · "),
+		);
+		if (!ref) return;
+		const artifacts = await github.artifacts(repo.name, ref.sha);
+		if (artifacts.length === 0) {
+			throw new Error(`${refLabel(ref)} has no build of its newest commit. Wait for its workflow to finish, then try again.`);
+		}
+		const artifact =
+			chooseArtifact(artifacts, repo.artifact) ??
+			(await choose(this.app, artifacts, (a) => a.name, "Choose the artifact that holds the plugin"));
+		if (!artifact) return;
+		await this.install(repo, ref, artifact);
+	}
+
+	private async install(repo: Repo, ref: Ref, artifact: Artifact) {
+		const downloading = new Notice(`Downloading ${artifact.name} from ${repo.name}.`, 0);
+		const build = await this.github()
+			.download(repo.name, artifact)
+			.finally(() => downloading.hide());
+		if (build.id === this.manifest.id) throw new Error("Local Linker cannot install a build of itself.");
+		repo.artifact = artifact.name;
+		const link: BuildLink = {
+			kind: "build",
+			id: build.id,
+			repo: repo.name,
+			pr: ref.pr,
+			branch: ref.branch,
+			title: ref.title,
+			sha: ref.sha,
+			artifact: artifact.name,
+			enabled: false,
+		};
+		const old = this.settings.links.find((l) => l.id === build.id);
+		if (old?.kind === "build" && old.enabled) {
+			await writeBuild(this.app.vault.adapter, this.buildPaths(build.id).target, build.files);
+			Object.assign(old, { ...link, enabled: true });
+			await this.save();
+			await this.reload(build.id);
+			new Notice(`Switched ${this.displayName(build.id)} to the build of ${refLabel(link)}.`);
+			return;
+		}
+		await writeBuild(this.app.vault.adapter, this.buildPaths(build.id).parked, build.files);
+		await this.replace(link);
+	}
+
+	/** Installs the newest build of the pull request or branch that `link` follows. */
+	async update(link: BuildLink) {
+		const github = this.github();
+		const name = this.displayName(link.id);
+		const ref = await github.refresh(link.repo, link);
+		if (ref.sha === link.sha) {
+			new Notice(`${name} has the newest build of ${refLabel(ref)}.`);
+			return;
+		}
+		const artifact = (await github.artifacts(link.repo, ref.sha)).find((a) => a.name === link.artifact);
+		if (!artifact) {
+			throw new Error(`${refLabel(ref)} has no ${link.artifact} build of its newest commit. Wait for its workflow to finish, then try again.`);
+		}
+		const build = await github.download(link.repo, artifact);
+		if (build.id !== link.id) {
+			throw new Error(`The newest build of ${refLabel(ref)} is the plugin ${build.id}, not ${link.id}. Install it from the repository list.`);
+		}
+		const { target, parked } = this.buildPaths(link.id);
+		await writeBuild(this.app.vault.adapter, link.enabled ? target : parked, build.files);
+		Object.assign(link, { title: ref.title, sha: ref.sha });
+		await this.save();
+		if (link.enabled) await this.reload(link.id);
+		new Notice(`Updated ${name} to the newest build of ${refLabel(ref)}.`);
+	}
+
 	watchAll() {
 		this.unwatchAll();
 		if (this.settings.autoReload) for (const link of this.active()) this.watch(link);
 	}
 
 	private watch(link: Link) {
-		if (!this.settings.autoReload) return;
+		if (!this.settings.autoReload || link.kind === "build" || !this.desktop) return;
 		this.unwatch(link.id);
 		try {
-			const watcher = fs.watch(link.source, (_event, file) => {
-				if (file && WATCHED.has(file.toString())) this.schedule(link.id);
+			const watcher = this.desktop.watchFolder(link.source, (file) => {
+				if (WATCHED.has(file)) this.schedule(link.id);
 			});
 			this.watchers.set(link.id, watcher);
 		} catch (e) {
@@ -230,9 +429,52 @@ export default class LocalPluginLinker extends Plugin {
 	}
 }
 
+/** Resolves with the chosen item, or with null if the person closes the list. */
+function choose<T>(app: App, items: T[], label: (item: T) => string, placeholder: string, note?: (item: T) => string): Promise<T | null> {
+	return new Promise((resolve) => new ChoiceModal(app, items, label, placeholder, resolve, note).open());
+}
+
+class ChoiceModal<T> extends FuzzySuggestModal<T> {
+	constructor(
+		app: App,
+		private items: T[],
+		private label: (item: T) => string,
+		placeholder: string,
+		private done: (item: T | null) => void,
+		private note?: (item: T) => string,
+	) {
+		super(app);
+		this.setPlaceholder(placeholder);
+	}
+
+	getItems(): T[] {
+		return this.items;
+	}
+
+	getItemText(item: T): string {
+		return this.label(item);
+	}
+
+	renderSuggestion(match: FuzzyMatch<T>, el: HTMLElement) {
+		super.renderSuggestion(match, el);
+		const note = this.note?.(match.item);
+		if (note) el.createDiv({ text: note, cls: "local-plugin-linker-note" });
+	}
+
+	onChooseItem(item: T) {
+		this.done(item);
+	}
+
+	onClose() {
+		// The modal closes before it reports the choice, so a close waits one turn to report no choice.
+		window.setTimeout(() => this.done(null), 0);
+	}
+}
+
 function describe(link: Link, brat: BratInstall | null, paused: boolean, bratOn: boolean): DocumentFragment {
 	const frag = createFragment();
-	frag.createDiv({ text: link.source });
+	if (link.kind === "build") frag.createDiv({ text: `${link.repo} ${refLabel(link)} (${link.sha.slice(0, 7)})` });
+	else frag.createDiv({ text: link.source });
 	if (!brat) return frag;
 	if (!link.enabled) {
 		frag.createDiv({ text: "Using the version installed by BRAT." });
@@ -242,7 +484,7 @@ function describe(link: Link, brat: BratInstall | null, paused: boolean, bratOn:
 	if (paused) {
 		frag.createDiv({ text: "BRAT is turned off while this link is on." });
 	} else if (bratOn && brat.updatesAtStartup) {
-		frag.createDiv({ text: UPDATE_WARNING, cls: "mod-warning" });
+		frag.createDiv({ text: link.kind === "build" ? BUILD_UPDATE_WARNING : FOLDER_UPDATE_WARNING, cls: "mod-warning" });
 	}
 	return frag;
 }
@@ -262,17 +504,21 @@ class LinkerSettingTab extends PluginSettingTab {
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		const { plugin } = this;
 		const refresh = () => this.update();
+		const links = plugin.usable();
 		return [
 			{
 				name: "Link plugin folder",
 				desc: "Replaces the installed version until you turn off the link.",
+				visible: plugin.desktop !== null,
 				render: (setting) => {
+					const desktop = plugin.desktop;
+					if (!desktop) return;
 					let input = "";
 					setting
 						.addText((text) => {
 							text.setPlaceholder("~/git/my-plugin").onChange((v) => (input = v));
 							text.inputEl.addClass("local-plugin-linker-path");
-							new FolderSuggest(this.app, text.inputEl);
+							new desktop.FolderSuggest(this.app, text.inputEl);
 						})
 						.addButton((button) =>
 							button
@@ -285,11 +531,12 @@ class LinkerSettingTab extends PluginSettingTab {
 			{
 				name: "Reload on change",
 				desc: "Reload a linked plugin when its files change.",
+				visible: plugin.desktop !== null,
 				control: { type: "toggle", key: "autoReload" },
 			},
 			{
 				name: "Turn off BRAT while linked",
-				desc: "Turn off BRAT while a link overrides a plugin it installed, so its updates cannot overwrite your folder. While BRAT is off, none of its plugins update.",
+				desc: "Turn off BRAT while a link overrides a plugin it installed, so its updates cannot overwrite your folder or build. While BRAT is off, none of its plugins update.",
 				control: { type: "toggle", key: "pauseBrat" },
 			},
 			{
@@ -297,10 +544,10 @@ class LinkerSettingTab extends PluginSettingTab {
 				heading: "Linked plugins",
 				emptyState: "No linked plugins.",
 				onDelete: (index) => {
-					const link = plugin.settings.links[index];
+					const link = links[index];
 					if (link) plugin.remove(link).then(refresh, report);
 				},
-				items: plugin.settings.links.map((link) => ({
+				items: links.map((link) => ({
 					name: plugin.displayName(link.id),
 					desc: describe(
 						link,
@@ -312,16 +559,89 @@ class LinkerSettingTab extends PluginSettingTab {
 					render: (setting: Setting) => {
 						setting.addToggle((t) =>
 							t
-								.setTooltip("Use linked folder")
+								.setTooltip(link.kind === "build" ? "Use this build" : "Use linked folder")
 								.setValue(link.enabled)
 								.onChange((on) => plugin.setEnabled(link, on).then(refresh, report)),
 						);
+						if (link.kind === "build") {
+							setting.addExtraButton((b) =>
+								b
+									.setIcon("download")
+									.setTooltip("Update to the newest build")
+									.onClick(() => plugin.update(link).then(refresh, report)),
+							);
+						}
 						if (link.enabled) {
 							setting.addExtraButton((b) =>
 								b
 									.setIcon("refresh-cw")
 									.setTooltip("Reload")
 									.onClick(() => plugin.reload(link.id)),
+							);
+						}
+					},
+				})),
+			},
+			{
+				name: "GitHub token",
+				desc: "Needed to download a build from GitHub Actions. For a public repository, a token with read-only access to public repositories is enough.",
+				render: (setting) => {
+					setting.addComponent((el) =>
+						new SecretComponent(this.app, el).setValue(plugin.settings.tokenSecret).onChange(async (value) => {
+							plugin.settings.tokenSecret = value;
+							await plugin.save();
+						}),
+					);
+				},
+			},
+			{
+				name: "Add GitHub repository",
+				desc: "A repository whose workflow uploads the plugin's main.js and manifest.json as an artifact.",
+				render: (setting) => {
+					let input = "";
+					setting
+						.addText((text) => {
+							text.setPlaceholder("owner/name").onChange((v) => (input = v));
+							text.inputEl.addClass("local-plugin-linker-path");
+						})
+						.addButton((button) =>
+							button
+								.setButtonText("Add")
+								.setCta()
+								.onClick(() => {
+									try {
+										plugin.addRepo(parseRepo(input)).then(refresh, report);
+									} catch (e) {
+										report(e);
+									}
+								}),
+						);
+				},
+			},
+			{
+				type: "list",
+				heading: "GitHub repositories",
+				emptyState: "No repositories.",
+				onDelete: (index) => {
+					plugin.settings.repos.splice(index, 1);
+					plugin.save().then(refresh, report);
+				},
+				items: plugin.settings.repos.map((repo) => ({
+					name: repo.name,
+					desc: repo.artifact ? `Installs the artifact ${repo.artifact}.` : "",
+					render: (setting: Setting) => {
+						setting.addButton((b) =>
+							b.setButtonText("Install a build").onClick(() => plugin.chooseBuild(repo).then(refresh, report)),
+						);
+						if (repo.artifact) {
+							setting.addExtraButton((b) =>
+								b
+									.setIcon("rotate-ccw")
+									.setTooltip("Choose the artifact again next time")
+									.onClick(() => {
+										delete repo.artifact;
+										plugin.save().then(refresh, report);
+									}),
 							);
 						}
 					},

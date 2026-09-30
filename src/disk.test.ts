@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { expandHome, isPluginFolder, linkIn, linkOut, readPluginId, suggestFolders } from "./disk";
+import { expandHome, githubRemotes, isPluginFolder, linkIn, linkOut, readPluginId, suggestFolders } from "./disk";
 
 let root: string;
 let source: string;
@@ -194,5 +194,53 @@ describe("isPluginFolder", () => {
 		expect(isPluginFolder(source)).toBe(false);
 		fs.writeFileSync(path.join(source, "manifest.json"), "{}");
 		expect(isPluginFolder(source)).toBe(true);
+	});
+});
+
+describe("githubRemotes", () => {
+	function gitConfig(...urls: string[]): string {
+		return urls.map((url, i) => `[remote "r${i}"]\n\turl = ${url}\n`).join("");
+	}
+
+	function writeGit(...urls: string[]) {
+		fs.mkdirSync(path.join(source, ".git"));
+		fs.writeFileSync(path.join(source, ".git", "config"), gitConfig(...urls));
+	}
+
+	it("returns nothing outside a git checkout", () => {
+		expect(githubRemotes(source)).toEqual([]);
+	});
+
+	it("reads HTTPS and SSH remotes, with or without .git, in lower case", () => {
+		writeGit("https://github.com/Someone/Whale-Tools.git", "git@github.com:upstream/whale-tools");
+		expect(githubRemotes(source)).toEqual(["someone/whale-tools", "upstream/whale-tools"]);
+	});
+
+	it("ignores remotes outside GitHub", () => {
+		writeGit("https://gitlab.com/someone/whale-tools.git");
+		expect(githubRemotes(source)).toEqual([]);
+	});
+
+	it("reads the remote of a worktree from its main checkout", () => {
+		const main = path.join(root, "main");
+		const worktreeGit = path.join(main, ".git", "worktrees", "source");
+		fs.mkdirSync(worktreeGit, { recursive: true });
+		fs.writeFileSync(path.join(main, ".git", "config"), gitConfig("https://github.com/someone/whale-tools.git"));
+		fs.writeFileSync(path.join(worktreeGit, "commondir"), "../..\n");
+		fs.writeFileSync(path.join(source, ".git"), `gitdir: ${worktreeGit}\n`);
+		expect(githubRemotes(source)).toEqual(["someone/whale-tools"]);
+	});
+
+	it("reads the remote of a linked git folder without a commondir", () => {
+		const gitDir = path.join(root, "gitdir");
+		fs.mkdirSync(gitDir);
+		fs.writeFileSync(path.join(gitDir, "config"), gitConfig("https://github.com/someone/whale-tools.git"));
+		fs.writeFileSync(path.join(source, ".git"), "gitdir: ../gitdir\n");
+		expect(githubRemotes(source)).toEqual(["someone/whale-tools"]);
+	});
+
+	it("ignores a .git file without a gitdir line", () => {
+		fs.writeFileSync(path.join(source, ".git"), "nonsense\n");
+		expect(githubRemotes(source)).toEqual([]);
 	});
 });

@@ -86,3 +86,23 @@ function isDir(parent: string, e: fs.Dirent): boolean {
 		return false;
 	}
 }
+
+/** The owner/name of every GitHub remote of a git checkout, lower case. A worktree reads its main checkout's config. */
+export function githubRemotes(source: string): string[] {
+	let gitDir = path.join(source, ".git");
+	try {
+		if (fs.statSync(gitDir).isFile()) {
+			const pointer = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(gitDir, "utf8"))?.[1]?.trim();
+			if (!pointer) return [];
+			gitDir = path.resolve(source, pointer);
+			const common = path.join(gitDir, "commondir");
+			if (fs.existsSync(common)) gitDir = path.resolve(gitDir, fs.readFileSync(common, "utf8").trim());
+		}
+		const config = fs.readFileSync(path.join(gitDir, "config"), "utf8");
+		return [...config.matchAll(/url\s*=\s*\S*github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\s*$/gm)].map((m) =>
+			(m[1] ?? "").toLowerCase(),
+		);
+	} catch {
+		return [];
+	}
+}

@@ -1,3 +1,8 @@
 .local-plugin-linker-path {
 	width: 22em;
 }
+
+.local-plugin-linker-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
