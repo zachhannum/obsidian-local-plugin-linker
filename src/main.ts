@@ -112,7 +112,7 @@ const DEFAULTS: Settings = {
 const GITHUB_CLIENT_ID = "Iv23lihnNV0HjTTnPR9w";
 
 /** The GitHub App's name in its github.com/apps URL. */
-const GITHUB_APP_SLUG = "local-plugin-linker";
+const GITHUB_APP_SLUG = "obsidian-local-linker";
 
 /** A sign-in keeps its tokens in Obsidian's secret storage under these names. */
 const SIGN_IN_SECRET = "local-linker-github";
