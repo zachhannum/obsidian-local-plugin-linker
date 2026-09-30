@@ -181,7 +181,7 @@ export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBui
 	return { id, name: typeof manifest.name === "string" ? manifest.name : id, files };
 }
 
-/** Starts GitHub's device flow. An empty scope reads public repositories only. */
+/** Starts GitHub's device flow. */
 export async function requestDeviceCode(post: Post, clientId: string, scope: string): Promise<DeviceCode> {
 	const body = (await post("https://github.com/login/device/code", { client_id: clientId, scope })).json() as {
 		device_code?: string;

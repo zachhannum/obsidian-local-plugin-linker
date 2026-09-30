@@ -82,7 +82,7 @@ interface Settings {
 	tokenSecret: string;
 	/** The GitHub login of the signed-in account. Empty when the token is not from a sign-in. */
 	githubUser: string;
-	/** Sign in with the repo scope. GitHub has no read-only scope for private repositories. */
+	/** Sign in with the repo scope instead of public_repo. */
 	privateRepos: boolean;
 	/** A personal access token replaces the sign-in, and the settings show only the token. */
 	useToken: boolean;
@@ -366,7 +366,9 @@ export default class LocalPluginLinker extends Plugin {
 	/** Signs in with GitHub's device flow. The person types a code on GitHub, so no token is copied by hand. */
 	async signIn() {
 		if (!GITHUB_CLIENT_ID) throw new Error("Sign-in to GitHub is not set up in this build. Use a token instead.");
-		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID, this.settings.privateRepos ? "repo" : "");
+		// GitHub requires a repository scope to download an artifact, and it has no read-only one.
+		const scope = this.settings.privateRepos ? "repo" : "public_repo";
+		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID, scope);
 		const modal = new SignInModal(this.app, code);
 		modal.open();
 		const token = await waitForToken(post, GITHUB_CLIENT_ID, code, (ms) => modal.wait(ms)).finally(() => modal.close());
@@ -728,7 +730,7 @@ class LinkerSettingTab extends PluginSettingTab {
 				name: "GitHub account",
 				desc: plugin.settings.githubUser
 					? `Signed in as ${plugin.settings.githubUser}.`
-					: "Sign in to download builds from GitHub Actions.",
+					: "Sign in to download builds from GitHub Actions. GitHub gives Local Linker read and write access to your public repositories, because it has no read-only access for artifacts.",
 				visible: () => !plugin.settings.useToken,
 				render: (setting) => {
 					if (plugin.settings.githubUser) {
@@ -747,7 +749,7 @@ class LinkerSettingTab extends PluginSettingTab {
 			},
 			{
 				name: "Include private repositories",
-				desc: "Ask for access to your private repositories when you sign in. GitHub then gives Local Linker read and write access to all of them, because GitHub has no read-only access for private repositories.",
+				desc: "Ask for access to your private repositories when you sign in. GitHub then gives Local Linker read and write access to all your repositories.",
 				visible: () => !plugin.settings.useToken && !plugin.settings.githubUser,
 				control: { type: "toggle", key: "privateRepos" },
 			},

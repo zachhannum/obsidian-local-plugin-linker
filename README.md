@@ -93,11 +93,11 @@ The list shows each linked folder and each build. For a folder, it shows the pat
 
 ### GitHub account
 
-Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications. To use a personal access token instead, select Use a token.
+Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. GitHub has no read-only access for artifacts, so the sign-in gives Local Linker read and write access to your public repositories. Local Linker only reads. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications. To use a personal access token instead, select Use a token.
 
 ### Include private repositories
 
-If this setting is on, the sign-in asks for access to your private repositories. GitHub has no read-only access for private repositories, so GitHub gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. The setting appears only while you are signed out.
+If this setting is on, the sign-in asks for access to your private repositories too. GitHub then gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. The setting appears only while you are signed out.
 
 ### GitHub token
 
