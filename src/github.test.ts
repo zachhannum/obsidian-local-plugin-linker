@@ -196,6 +196,17 @@ describe("GitHub.download", () => {
 		expect(calls).toEqual([]);
 	});
 
+	it("downloads with the zip getter when one is given", async () => {
+		const api = fakeGet({});
+		const zips = fakeGet({
+			"/repos/someone/orca/actions/artifacts/1/zip": zip({ "manifest.json": manifest, "main.js": "code" }),
+		});
+		const build = await new GitHub(api.get, "secret", zips.get).download("someone/orca", { id: 1, name: "plugin" });
+		expect(build.id).toBe("orca");
+		expect(api.calls).toEqual([]);
+		expect(zips.calls[0]?.headers.Authorization).toBe("Bearer secret");
+	});
+
 	it("downloads and reads the plugin", async () => {
 		const { get } = fakeGet({
 			"/repos/someone/orca/actions/artifacts/1/zip": zip({ "manifest.json": manifest, "main.js": "code" }),

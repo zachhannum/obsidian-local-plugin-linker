@@ -67,9 +67,14 @@ export function refLabel(ref: Pick<Ref, "pr" | "branch" | "title">): string {
 }
 
 export class GitHub {
+	/**
+	 * `getZip` downloads an artifact. GitHub redirects it to storage that refuses a request that still
+	 * carries the GitHub token, so `getZip` must drop the Authorization header on a redirect to another host.
+	 */
 	constructor(
 		private get: Get,
 		private token: string | null,
+		private getZip: Get = get,
 	) {}
 
 	/** Open pull requests, newest update first, then branches. */
@@ -116,7 +121,7 @@ export class GitHub {
 	/** GitHub requires a token to download an artifact, even from a public repo. */
 	async download(repo: string, artifact: Artifact): Promise<PluginBuild> {
 		if (!this.token) throw new Error("Sign in to GitHub in Local Linker settings to download a build.");
-		const response = await this.get(`${API}/repos/${repo}/actions/artifacts/${artifact.id}/zip`, this.headers());
+		const response = await this.getZip(`${API}/repos/${repo}/actions/artifacts/${artifact.id}/zip`, this.headers());
 		check(response, repo);
 		return readPluginZip(response.bytes(), artifact.name);
 	}

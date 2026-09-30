@@ -137,6 +137,13 @@ const post: Post = async (url, form) => {
 	return { status: response.status, json: () => response.json as unknown, bytes: () => response.arrayBuffer };
 };
 
+/** fetch drops the Authorization header on a redirect to another host. requestUrl keeps it. */
+const getZip: Get = async (url, headers) => {
+	const response = await fetch(url, { headers });
+	const bytes = await response.arrayBuffer();
+	return { status: response.status, json: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown, bytes: () => bytes };
+};
+
 export default class LocalPluginLinker extends Plugin {
 	settings: Settings = DEFAULTS;
 	/** Node's file system. Null on mobile, where folder links do not work. */
@@ -353,7 +360,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	github(): GitHub {
 		const token = this.settings.tokenSecret ? this.app.secretStorage.getSecret(this.settings.tokenSecret) : null;
-		return new GitHub(get, token);
+		return new GitHub(get, token, getZip);
 	}
 
 	/** Signs in with GitHub's device flow. The person types a code on GitHub, so no token is copied by hand. */
