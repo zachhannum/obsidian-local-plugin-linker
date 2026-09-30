@@ -24,6 +24,15 @@ export interface DeviceCode {
 	interval: number;
 }
 
+/** The tokens from a sign-in. */
+export interface Grant {
+	token: string;
+	/** Empty when the token does not expire. */
+	refreshToken: string;
+	/** Milliseconds since the epoch. 0 when the token does not expire. */
+	expiresAt: number;
+}
+
 /** An open pull request or a branch, at its newest commit. */
 export interface Ref {
 	/** A pull request has a number. A branch has none. */
@@ -181,9 +190,9 @@ export function readPluginZip(zip: ArrayBuffer, artifactName: string): PluginBui
 	return { id, name: typeof manifest.name === "string" ? manifest.name : id, files };
 }
 
-/** Starts GitHub's device flow. */
-export async function requestDeviceCode(post: Post, clientId: string, scope: string): Promise<DeviceCode> {
-	const body = (await post("https://github.com/login/device/code", { client_id: clientId, scope })).json() as {
+/** Starts GitHub's device flow. A GitHub App takes its access from its permissions, not from a scope. */
+export async function requestDeviceCode(post: Post, clientId: string): Promise<DeviceCode> {
+	const body = (await post("https://github.com/login/device/code", { client_id: clientId })).json() as {
 		device_code?: string;
 		user_code?: string;
 		verification_uri?: string;
@@ -201,8 +210,21 @@ export async function requestDeviceCode(post: Post, clientId: string, scope: str
 	};
 }
 
+interface TokenBody {
+	access_token?: string;
+	refresh_token?: string;
+	expires_in?: number;
+	error?: string;
+	error_description?: string;
+	interval?: number;
+}
+
+function toGrant(token: string, body: TokenBody, now: number): Grant {
+	return { token, refreshToken: body.refresh_token ?? "", expiresAt: body.expires_in ? now + body.expires_in * 1000 : 0 };
+}
+
 /** Polls until the person enters the code on GitHub. It resolves null if the wait is canceled. */
-export async function waitForToken(post: Post, clientId: string, code: DeviceCode, wait: Wait): Promise<string | null> {
+export async function waitForToken(post: Post, clientId: string, code: DeviceCode, wait: Wait, now = Date.now): Promise<Grant | null> {
 	let interval = code.interval;
 	for (;;) {
 		if (!(await wait(interval * 1000))) return null;
@@ -212,8 +234,8 @@ export async function waitForToken(post: Post, clientId: string, code: DeviceCod
 				device_code: code.deviceCode,
 				grant_type: "urn:ietf:params:oauth:grant-type:device_code",
 			})
-		).json() as { access_token?: string; error?: string; error_description?: string; interval?: number };
-		if (body.access_token) return body.access_token;
+		).json() as TokenBody;
+		if (body.access_token) return toGrant(body.access_token, body, now());
 		if (body.error === "authorization_pending") continue;
 		if (body.error === "slow_down") {
 			interval = body.interval ?? interval + 5;
@@ -223,6 +245,19 @@ export async function waitForToken(post: Post, clientId: string, code: DeviceCod
 		if (body.error === "access_denied") throw new Error("You canceled the sign-in on GitHub.");
 		throw new Error(`GitHub sign-in failed: ${body.error_description ?? body.error ?? "no token"}. Try again later.`);
 	}
+}
+
+/** Trades a refresh token for a new grant. A token from the device flow renews without the client secret. */
+export async function refreshGrant(post: Post, clientId: string, refreshToken: string, now = Date.now): Promise<Grant> {
+	const body = (
+		await post("https://github.com/login/oauth/access_token", {
+			client_id: clientId,
+			grant_type: "refresh_token",
+			refresh_token: refreshToken,
+		})
+	).json() as TokenBody;
+	if (body.access_token) return toGrant(body.access_token, body, now());
+	throw new Error(`GitHub did not renew the sign-in: ${body.error_description ?? body.error ?? "no token"}. Sign in again in Local Linker settings.`);
 }
 
 /** Throws for an error status. `step` names the request, as in "GitHub refused to <step>". */
@@ -237,7 +272,7 @@ function check(response: HttpResponse, repo: string, step: string) {
 	}
 	if (status === 403) throw new Error(`GitHub refused to ${step} of ${repo}.${says} Sign in again, or use a token that can read ${repo}.`);
 	if (status === 404) {
-		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, turn on Include private repositories and sign in again.`);
+		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it.`);
 	}
 	if (status === 410) throw new Error("This build has expired on GitHub. Rerun the workflow, then install again.");
 	throw new Error(`GitHub returned status ${status} when it tried to ${step}.${says} Try again later.`);

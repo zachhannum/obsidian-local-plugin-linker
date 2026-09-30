@@ -10,6 +10,7 @@ import {
 	Post,
 	readPluginZip,
 	refLabel,
+	refreshGrant,
 	requestDeviceCode,
 	waitForToken,
 } from "./github";
@@ -108,7 +109,7 @@ describe("GitHub.refs", () => {
 		[401, "GitHub rejected the token. Sign in again in Local Linker settings."],
 		[403, "GitHub refused to list the branches of someone/orca. Sign in again, or use a token that can read someone/orca."],
 		[429, "GitHub rate limit reached. Sign in, or try again later."],
-		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, turn on Include private repositories and sign in again."],
+		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, install the Local Linker GitHub App on it, or use a token that can read it."],
 		[410, "This build has expired on GitHub. Rerun the workflow, then install again."],
 		[502, "GitHub returned status 502 when it tried to list the branches. Try again later."],
 	])("explains status %i", async (code, message) => {
@@ -343,32 +344,32 @@ function fakePost(...bodies: unknown[]) {
 }
 
 describe("requestDeviceCode", () => {
-	it("starts the device flow with the scope", async () => {
+	it("starts the device flow", async () => {
 		const { post, forms } = fakePost({ device_code: "dev", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device", interval: 7 });
-		expect(await requestDeviceCode(post, "client", "repo")).toEqual({
+		expect(await requestDeviceCode(post, "client")).toEqual({
 			deviceCode: "dev",
 			userCode: "ABCD-1234",
 			verificationUri: "https://github.com/login/device",
 			interval: 7,
 		});
-		expect(forms).toEqual([{ url: "https://github.com/login/device/code", form: { client_id: "client", scope: "repo" } }]);
+		expect(forms).toEqual([{ url: "https://github.com/login/device/code", form: { client_id: "client" } }]);
 	});
 
 	it("polls every five seconds when GitHub gives no interval", async () => {
 		const { post } = fakePost({ device_code: "dev", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device" });
-		expect((await requestDeviceCode(post, "client", "")).interval).toBe(5);
+		expect((await requestDeviceCode(post, "client")).interval).toBe(5);
 	});
 
 	it("explains a refusal", async () => {
 		const { post } = fakePost({ error: "device_flow_disabled", error_description: "Device Flow must be explicitly enabled" });
-		await expect(requestDeviceCode(post, "client", "")).rejects.toThrow(
+		await expect(requestDeviceCode(post, "client")).rejects.toThrow(
 			"GitHub did not start the sign-in: Device Flow must be explicitly enabled. Try again later.",
 		);
 	});
 
 	it("explains a refusal without a description", async () => {
 		const { post } = fakePost({});
-		await expect(requestDeviceCode(post, "client", "")).rejects.toThrow("GitHub did not start the sign-in: no code. Try again later.");
+		await expect(requestDeviceCode(post, "client")).rejects.toThrow("GitHub did not start the sign-in: no code. Try again later.");
 	});
 });
 
@@ -385,9 +386,9 @@ describe("waitForToken", () => {
 	}
 
 	it("polls until the person enters the code", async () => {
-		const { post, forms } = fakePost({ error: "authorization_pending" }, { access_token: "token" });
+		const { post, forms } = fakePost({ error: "authorization_pending" }, { access_token: "token", refresh_token: "renew", expires_in: 28800 });
 		const { wait, waits } = recordWaits();
-		expect(await waitForToken(post, "client", code, wait)).toBe("token");
+		expect(await waitForToken(post, "client", code, wait, () => 1000)).toEqual({ token: "token", refreshToken: "renew", expiresAt: 28801000 });
 		expect(waits).toEqual([5000, 5000]);
 		expect(forms[0]).toEqual({
 			url: "https://github.com/login/oauth/access_token",
@@ -409,6 +410,11 @@ describe("waitForToken", () => {
 		expect(forms).toHaveLength(1);
 	});
 
+	it("keeps a token that does not expire", async () => {
+		const { post } = fakePost({ access_token: "token" });
+		expect(await waitForToken(post, "client", code, recordWaits().wait)).toEqual({ token: "token", refreshToken: "", expiresAt: 0 });
+	});
+
 	it.each([
 		[{ error: "expired_token" }, "The sign-in code expired. Sign in again."],
 		[{ error: "access_denied" }, "You canceled the sign-in on GitHub."],
@@ -418,5 +424,24 @@ describe("waitForToken", () => {
 	])("explains %j", async (body, message) => {
 		const { post } = fakePost(body);
 		await expect(waitForToken(post, "client", code, recordWaits().wait)).rejects.toThrow(message);
+	});
+});
+
+describe("refreshGrant", () => {
+	it("trades the refresh token for a new grant", async () => {
+		const { post, forms } = fakePost({ access_token: "new", refresh_token: "renew2", expires_in: 60 });
+		expect(await refreshGrant(post, "client", "renew", () => 1000)).toEqual({ token: "new", refreshToken: "renew2", expiresAt: 61000 });
+		expect(forms).toEqual([
+			{ url: "https://github.com/login/oauth/access_token", form: { client_id: "client", grant_type: "refresh_token", refresh_token: "renew" } },
+		]);
+	});
+
+	it.each([
+		[{ error: "bad_refresh_token", error_description: "The refresh token passed is incorrect or expired." }, "The refresh token passed is incorrect or expired."],
+		[{ error: "bad_refresh_token" }, "bad_refresh_token"],
+		[{}, "no token"],
+	])("explains %j", async (body, reason) => {
+		const { post } = fakePost(body);
+		await expect(refreshGrant(post, "client", "renew")).rejects.toThrow(`GitHub did not renew the sign-in: ${reason}. Sign in again in Local Linker settings.`);
 	});
 });

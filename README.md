@@ -95,11 +95,11 @@ The list shows each linked folder and each build. For a folder, it shows the pat
 
 ### GitHub account
 
-Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. GitHub has no read-only access for artifacts, so the sign-in gives Local Linker read and write access to your public repositories. Local Linker only reads. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications. To use a personal access token instead, select Use a token.
+Sign in to GitHub here. GitHub requires a sign-in to download an artifact, even from a public repository. The sign-in uses the Local Linker GitHub App, which gets read-only access to Actions, contents and pull requests. Local Linker keeps the sign-in in Obsidian's secret storage, not in its settings file. The sign-in expires after 8 hours, and Local Linker renews it when it next connects to GitHub. To remove the access completely, sign out, then revoke Local Linker in your GitHub settings under Applications. To use a personal access token instead, select Use a token.
 
-### Include private repositories
+### Private repositories
 
-If this setting is on, the sign-in asks for access to your private repositories too. GitHub then gives Local Linker read and write access to all your repositories. Local Linker only reads. It is off by default. The setting appears only while you are signed out.
+The sign-in reads only public repositories and the repositories where the Local Linker GitHub App is installed. To install builds from a private repository, select Install on GitHub, then choose the repository.
 
 ### GitHub token
 
@@ -155,7 +155,7 @@ It reads only these files and folders:
 
 It writes only in your vault's plugins folder. It makes and removes a symlink for each link, and it writes the files of each build that you install. It moves an installed plugin into its own `stash` folder and back. It never changes a file in a folder that you link.
 
-To install a build, it connects to the GitHub API at `api.github.com` and downloads the artifact from GitHub. To sign in, it connects to `github.com`. It sends your GitHub token with each request to GitHub. It connects to GitHub only to sign in, and to install or update a build. You need a GitHub account.
+To install a build, it connects to the GitHub API at `api.github.com` and downloads the artifact from GitHub. To sign in and to renew the sign-in, it connects to `github.com`. It sends your GitHub token with each request to GitHub. It connects to GitHub only to sign in, and to install or update a build. You need a GitHub account.
 
 It also uses Obsidian's internal plugin API to turn plugins on, turn them off and reload them. A future Obsidian version can change that API.
 

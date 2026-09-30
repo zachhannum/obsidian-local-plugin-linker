@@ -22,10 +22,12 @@ import {
 	DeviceCode,
 	Get,
 	GitHub,
+	Grant,
 	parseRepo,
 	Post,
 	Ref,
 	refLabel,
+	refreshGrant,
 	requestDeviceCode,
 	waitForToken,
 } from "./github";
@@ -83,8 +85,8 @@ interface Settings {
 	tokenSecret: string;
 	/** The GitHub login of the signed-in account. Empty when the token is not from a sign-in. */
 	githubUser: string;
-	/** Sign in with the repo scope instead of public_repo. */
-	privateRepos: boolean;
+	/** When the sign-in token expires, in milliseconds since the epoch. 0 when it does not expire. */
+	tokenExpires: number;
 	/** A personal access token replaces the sign-in, and the settings show only the token. */
 	useToken: boolean;
 	autoReload: boolean;
@@ -99,18 +101,25 @@ const DEFAULTS: Settings = {
 	repos: [],
 	tokenSecret: "",
 	githubUser: "",
-	privateRepos: false,
+	tokenExpires: 0,
 	useToken: false,
 	autoReload: true,
 	pauseBrat: false,
 	bratPaused: false,
 };
 
-/** The OAuth app that signs in to GitHub, with device flow turned on. A client ID is public. */
-const GITHUB_CLIENT_ID = "Ov23lif4T8TFgkDz2A3b";
+/** The GitHub App that signs in to GitHub, with device flow turned on. A client ID is public. */
+const GITHUB_CLIENT_ID = "";
 
-/** A sign-in keeps its token in Obsidian's secret storage under this name. */
+/** The GitHub App's name in its github.com/apps URL. */
+const GITHUB_APP_SLUG = "local-plugin-linker";
+
+/** A sign-in keeps its tokens in Obsidian's secret storage under these names. */
 const SIGN_IN_SECRET = "local-linker-github";
+const REFRESH_SECRET = "local-linker-github-refresh";
+
+/** A token this close to its expiry is renewed before use. */
+const EXPIRY_MARGIN = 5 * 60 * 1000;
 
 const BRAT_ID = "obsidian42-brat";
 
@@ -382,7 +391,13 @@ export default class LocalPluginLinker extends Plugin {
 		new Notice(`Reloaded ${this.displayName(id)}.`);
 	}
 
-	github(): GitHub {
+	async github(): Promise<GitHub> {
+		const { tokenSecret, tokenExpires } = this.settings;
+		if (tokenSecret === SIGN_IN_SECRET && tokenExpires && Date.now() > tokenExpires - EXPIRY_MARGIN) {
+			const refreshToken = this.app.secretStorage.getSecret(REFRESH_SECRET);
+			if (!refreshToken) throw new Error("Your GitHub sign-in expired. Sign in again in Local Linker settings.");
+			await this.keepGrant(await refreshGrant(post, GITHUB_CLIENT_ID, refreshToken));
+		}
 		const token = this.settings.tokenSecret ? this.app.secretStorage.getSecret(this.settings.tokenSecret) : null;
 		return new GitHub(get, token, getZip);
 	}
@@ -390,18 +405,14 @@ export default class LocalPluginLinker extends Plugin {
 	/** Signs in with GitHub's device flow. The person types a code on GitHub, so no token is copied by hand. */
 	async signIn() {
 		if (!GITHUB_CLIENT_ID) throw new Error("GitHub sign-in is not available in this build. Use a personal access token instead.");
-		// GitHub requires a repository scope to download an artifact, and it has no read-only one.
-		const scope = this.settings.privateRepos ? "repo" : "public_repo";
-		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID, scope);
+		const code = await requestDeviceCode(post, GITHUB_CLIENT_ID);
 		const modal = new SignInModal(this.app, code);
 		modal.open();
-		const token = await waitForToken(post, GITHUB_CLIENT_ID, code, (ms) => modal.wait(ms)).finally(() => modal.close());
-		if (!token) return;
-		this.app.secretStorage.setSecret(SIGN_IN_SECRET, token);
-		this.settings.tokenSecret = SIGN_IN_SECRET;
+		const grant = await waitForToken(post, GITHUB_CLIENT_ID, code, (ms) => modal.wait(ms)).finally(() => modal.close());
+		if (!grant) return;
 		this.settings.useToken = false;
-		this.settings.githubUser = await new GitHub(get, token).user();
-		await this.save();
+		this.settings.githubUser = await new GitHub(get, grant.token).user();
+		await this.keepGrant(grant);
 		new Notice(`Signed in to GitHub as ${this.settings.githubUser}.`);
 	}
 
@@ -418,9 +429,21 @@ export default class LocalPluginLinker extends Plugin {
 		await this.save();
 	}
 
+	private async keepGrant(grant: Grant) {
+		this.app.secretStorage.setSecret(SIGN_IN_SECRET, grant.token);
+		this.app.secretStorage.setSecret(REFRESH_SECRET, grant.refreshToken);
+		this.settings.tokenSecret = SIGN_IN_SECRET;
+		this.settings.tokenExpires = grant.expiresAt;
+		await this.save();
+	}
+
 	private forgetSignIn() {
-		if (this.settings.tokenSecret === SIGN_IN_SECRET) this.app.secretStorage.setSecret(SIGN_IN_SECRET, "");
+		if (this.settings.tokenSecret === SIGN_IN_SECRET) {
+			this.app.secretStorage.setSecret(SIGN_IN_SECRET, "");
+			this.app.secretStorage.setSecret(REFRESH_SECRET, "");
+		}
 		this.settings.tokenSecret = "";
+		this.settings.tokenExpires = 0;
 		this.settings.githubUser = "";
 	}
 
@@ -432,7 +455,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	/** Asks for a pull request or branch, and for an artifact if the choice is not clear, then installs the build. */
 	async chooseBuild(repo: Repo) {
-		const github = this.github();
+		const github = await this.github();
 		const refs = await github.refs(repo.name);
 		if (refs.length === 0) throw new Error(`${repo.name} has no open pull requests or branches.`);
 		const ref = await choose(this.app, refs, refLabel, "Choose a pull request or branch", (r) =>
@@ -452,7 +475,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	private async install(repo: Repo, ref: Ref, artifact: Artifact) {
 		const downloading = new Notice(`Downloading ${artifact.name} from ${repo.name}...`, 0);
-		const build = await this.github()
+		const build = await (await this.github())
 			.download(repo.name, artifact)
 			.finally(() => downloading.hide());
 		if (build.id === this.manifest.id) throw new Error("Local Linker cannot install a build of itself.");
@@ -484,7 +507,7 @@ export default class LocalPluginLinker extends Plugin {
 
 	/** Installs the newest build of the pull request or branch that `link` follows. */
 	async update(link: BuildLink) {
-		const github = this.github();
+		const github = await this.github();
 		const name = this.displayName(link.id);
 		const ref = await github.refresh(link.repo, link);
 		if (ref.sha === link.sha) {
@@ -803,7 +826,7 @@ class LinkerSettingTab extends PluginSettingTab {
 				name: "GitHub account",
 				desc: plugin.settings.githubUser
 					? `Signed in as ${plugin.settings.githubUser}.`
-					: "Sign in to download builds from GitHub Actions. GitHub has no read-only access to artifacts, so Local Linker asks for read and write access to your public repositories.",
+					: "Sign in to download builds from GitHub Actions. Local Linker gets read-only access.",
 				visible: () => !plugin.settings.useToken,
 				render: (setting) => {
 					if (plugin.settings.githubUser) {
@@ -821,10 +844,14 @@ class LinkerSettingTab extends PluginSettingTab {
 				},
 			},
 			{
-				name: "Include private repositories",
-				desc: "Also ask for access to private repositories when you sign in. Local Linker then gets read and write access to all your repositories.",
-				visible: () => !plugin.settings.useToken && !plugin.settings.githubUser,
-				control: { type: "toggle", key: "privateRepos" },
+				name: "Private repositories",
+				desc: "To install builds from a private repository, install the Local Linker GitHub App on it.",
+				visible: () => !plugin.settings.useToken,
+				render: (setting) => {
+					setting.addButton((b) =>
+						b.setButtonText("Install on GitHub").onClick(() => window.open(`https://github.com/apps/${GITHUB_APP_SLUG}/installations/new`)),
+					);
+				},
 			},
 			{
 				name: "GitHub token",
