@@ -109,7 +109,7 @@ const DEFAULTS: Settings = {
 };
 
 /** The GitHub App that signs in to GitHub, with device flow turned on. A client ID is public. */
-const GITHUB_CLIENT_ID = "";
+const GITHUB_CLIENT_ID = "Iv23lihnNV0HjTTnPR9w";
 
 /** The GitHub App's name in its github.com/apps URL. */
 const GITHUB_APP_SLUG = "local-plugin-linker";
