@@ -80,9 +80,9 @@ export class GitHub {
 	/** Open pull requests, newest update first, then branches. */
 	async refs(repo: string): Promise<Ref[]> {
 		const [pulls, branches, runs] = await Promise.all([
-			this.api(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`, repo),
-			this.api(`/repos/${repo}/branches?per_page=100`, repo),
-			this.api(`/repos/${repo}/actions/runs?status=success&per_page=100`, repo),
+			this.api(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100`, repo, "list the pull requests"),
+			this.api(`/repos/${repo}/branches?per_page=100`, repo, "list the branches"),
+			this.api(`/repos/${repo}/actions/runs?status=success&per_page=100`, repo, "list the workflow runs"),
 		]);
 		const built = new Set(((runs as RunList).workflow_runs ?? []).map((r) => r.head_sha));
 		return [
@@ -93,16 +93,16 @@ export class GitHub {
 
 	/** The newest commit of a pull request or branch that `ref` names. */
 	async refresh(repo: string, ref: Pick<Ref, "pr" | "branch">): Promise<Ref> {
-		if (ref.pr !== undefined) return pullRef((await this.api(`/repos/${repo}/pulls/${ref.pr}`, repo)) as Pull, new Set());
-		return branchRef((await this.api(`/repos/${repo}/branches/${encodeURIComponent(ref.branch)}`, repo)) as Branch, new Set());
+		if (ref.pr !== undefined) return pullRef((await this.api(`/repos/${repo}/pulls/${ref.pr}`, repo, "read the pull request")) as Pull, new Set());
+		return branchRef((await this.api(`/repos/${repo}/branches/${encodeURIComponent(ref.branch)}`, repo, "read the branch")) as Branch, new Set());
 	}
 
 	/** The artifacts of the successful runs for a commit that have not expired. For a repeated name, the newest wins. */
 	async artifacts(repo: string, sha: string): Promise<Artifact[]> {
-		const runs = (await this.api(`/repos/${repo}/actions/runs?head_sha=${sha}&status=success&per_page=20`, repo)) as RunList;
+		const runs = (await this.api(`/repos/${repo}/actions/runs?head_sha=${sha}&status=success&per_page=20`, repo, "list the workflow runs")) as RunList;
 		const byName = new Map<string, Artifact & { created: string }>();
 		for (const run of runs.workflow_runs ?? []) {
-			const list = (await this.api(`/repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`, repo)) as ArtifactList;
+			const list = (await this.api(`/repos/${repo}/actions/runs/${run.id}/artifacts?per_page=100`, repo, "list the artifacts")) as ArtifactList;
 			for (const a of list.artifacts ?? []) {
 				if (a.expired) continue;
 				const old = byName.get(a.name);
@@ -114,7 +114,7 @@ export class GitHub {
 
 	/** The login of the token's owner. */
 	async user(): Promise<string> {
-		const user = (await this.api("/user", "your account")) as { login: string };
+		const user = (await this.api("/user", "your account", "read your account")) as { login: string };
 		return user.login;
 	}
 
@@ -122,13 +122,13 @@ export class GitHub {
 	async download(repo: string, artifact: Artifact): Promise<PluginBuild> {
 		if (!this.token) throw new Error("Sign in to GitHub in Local Linker settings to download a build.");
 		const response = await this.getZip(`${API}/repos/${repo}/actions/artifacts/${artifact.id}/zip`, this.headers());
-		check(response, repo);
+		check(response, repo, "download the build");
 		return readPluginZip(response.bytes(), artifact.name);
 	}
 
-	private async api(route: string, repo: string): Promise<unknown> {
+	private async api(route: string, repo: string, step: string): Promise<unknown> {
 		const response = await this.get(API + route, this.headers());
-		check(response, repo);
+		check(response, repo, step);
 		return response.json();
 	}
 
@@ -225,16 +225,32 @@ export async function waitForToken(post: Post, clientId: string, code: DeviceCod
 	}
 }
 
-function check(response: HttpResponse, repo: string) {
+/** Throws for an error status. `step` names the request, as in "GitHub refused to <step>". */
+function check(response: HttpResponse, repo: string, step: string) {
 	const { status } = response;
 	if (status < 400) return;
-	if (status === 401) throw new Error("GitHub did not accept the sign-in. Sign in again in Local Linker settings.");
-	if (status === 403 || status === 429) {
-		throw new Error("GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later.");
+	const reason = errorMessage(response);
+	const says = reason ? ` GitHub says: ${reason.replace(/\.?$/, ".")}` : "";
+	if (status === 401) throw new Error(`GitHub did not accept the sign-in.${says} Sign in again in Local Linker settings.`);
+	if (status === 429 || /rate limit/i.test(reason)) {
+		throw new Error("GitHub's rate limit is reached. Sign in to GitHub, or try again later.");
 	}
-	if (status === 404) throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, sign in with private repositories turned on.`);
+	if (status === 403) throw new Error(`GitHub refused to ${step} of ${repo}.${says} Sign in again, or use a token that can read ${repo}.`);
+	if (status === 404) {
+		throw new Error(`GitHub cannot find ${repo} or its build. Check the name. For a private repository, sign in with private repositories turned on.`);
+	}
 	if (status === 410) throw new Error("The build expired on GitHub. Run the workflow again, then install again.");
-	throw new Error(`GitHub returned status ${status}. Try again later.`);
+	throw new Error(`GitHub returned status ${status} when it tried to ${step}.${says} Try again later.`);
+}
+
+/** The message in GitHub's error body, or an empty string. */
+function errorMessage(response: HttpResponse): string {
+	try {
+		const { message } = response.json() as { message?: unknown };
+		return typeof message === "string" ? message : "";
+	} catch {
+		return "";
+	}
 }
 
 interface Pull {

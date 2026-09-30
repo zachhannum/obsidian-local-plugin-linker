@@ -25,12 +25,14 @@ function respond(status: number, body: unknown): HttpResponse {
 }
 
 /** Answers each route from `routes`, and records the headers of each request. */
-function fakeGet(routes: Record<string, unknown>, status: Record<string, number> = {}) {
+/** A `status` entry answers its route with that status, and with a body if one is given. */
+function fakeGet(routes: Record<string, unknown>, status: Record<string, number | [number, unknown]> = {}) {
 	const calls: { url: string; headers: Record<string, string> }[] = [];
 	const get: Get = async (url, headers) => {
 		calls.push({ url, headers });
 		const route = url.slice(API.length);
-		if (route in status) return respond(status[route] ?? 500, {});
+		const failure = status[route];
+		if (failure !== undefined) return Array.isArray(failure) ? respond(failure[0], failure[1]) : respond(failure, {});
 		if (!(route in routes)) return respond(404, {});
 		return respond(200, routes[route]);
 	};
@@ -104,14 +106,37 @@ describe("GitHub.refs", () => {
 
 	it.each([
 		[401, "GitHub did not accept the sign-in. Sign in again in Local Linker settings."],
-		[403, "GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later."],
-		[429, "GitHub refused the request, probably because of its rate limit. Sign in to GitHub, or try again later."],
+		[403, "GitHub refused to list the branches of someone/orca. Sign in again, or use a token that can read someone/orca."],
+		[429, "GitHub's rate limit is reached. Sign in to GitHub, or try again later."],
 		[404, "GitHub cannot find someone/orca or its build. Check the name. For a private repository, sign in with private repositories turned on."],
 		[410, "The build expired on GitHub. Run the workflow again, then install again."],
-		[502, "GitHub returned status 502. Try again later."],
+		[502, "GitHub returned status 502 when it tried to list the branches. Try again later."],
 	])("explains status %i", async (code, message) => {
 		const { get } = fakeGet(routes, { "/repos/someone/orca/branches?per_page=100": code });
 		await expect(new GitHub(get, null).refs("someone/orca")).rejects.toThrow(message);
+	});
+
+	it.each([
+		[403, { message: "API rate limit exceeded for 1.2.3.4." }, "GitHub's rate limit is reached."],
+		[403, { message: "Resource not accessible by integration" }, "of someone/orca. GitHub says: Resource not accessible by integration. Sign in"],
+		[401, { message: "Bad credentials" }, "GitHub did not accept the sign-in. GitHub says: Bad credentials. Sign in again"],
+		[500, { message: 7 }, "GitHub returned status 500 when it tried to list the branches. Try again later."],
+	])("uses GitHub's message for status %i: %j", async (code, body, message) => {
+		const { get } = fakeGet(routes, { "/repos/someone/orca/branches?per_page=100": [code, body] });
+		await expect(new GitHub(get, null).refs("someone/orca")).rejects.toThrow(message);
+	});
+
+	it("ignores an error body that is not JSON", async () => {
+		const get: Get = async () => ({
+			status: 403,
+			json: () => {
+				throw new SyntaxError("not JSON");
+			},
+			bytes: () => new ArrayBuffer(0),
+		});
+		await expect(new GitHub(get, null).refs("someone/orca")).rejects.toThrow(
+			"GitHub refused to list the pull requests of someone/orca. Sign in again",
+		);
 	});
 });
 
