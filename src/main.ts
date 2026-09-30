@@ -272,15 +272,37 @@ export default class LocalPluginLinker extends Plugin {
 		const source = desktop.resolveFolder(input);
 		const id = desktop.readPluginId(source);
 		if (id === this.manifest.id) throw new Error("Local Linker cannot link itself.");
-		await this.replace({ id, source, enabled: false });
+		const link: FolderLink = { id, source, enabled: false };
+		if (await this.mayReplace(link)) await this.replace(link);
+	}
+
+	/**
+	 * Asks before a folder link replaces a build, or a build replaces a folder link, because the old one
+	 * leaves the list. A build that replaces a build is the normal switch between pull requests, so it does not ask.
+	 */
+	private async mayReplace(link: Link): Promise<boolean> {
+		const old = this.settings.links.find((l) => l.id === link.id);
+		if (!old || (old.kind === "build") === (link.kind === "build")) return true;
+		const name = this.displayName(link.id);
+		if (link.kind === "build" && old.kind !== "build") {
+			if (!this.desktop) {
+				throw new Error(`${name} has a folder link from the desktop app. Remove that link in the desktop app, then try again.`);
+			}
+			return confirm(
+				this.app,
+				`${name} uses the linked folder ${old.source}. Replace it with the build of ${refLabel(link)}? The link is removed from the list. Your folder stays on disk.`,
+			);
+		}
+		if (old.kind !== "build") return true;
+		return confirm(
+			this.app,
+			`${name} uses the build of ${refLabel(old)}. Replace it with the linked folder? The build is removed from the list and deleted.`,
+		);
 	}
 
 	/** Puts `link` in the list in place of any link for the same plugin, then turns it on. */
 	private async replace(link: Link) {
 		const old = this.settings.links.find((l) => l.id === link.id);
-		if (old && old.kind !== "build" && !this.desktop) {
-			throw new Error(`${this.displayName(link.id)} has a folder link from the desktop app. Remove that link in the desktop app, then try again.`);
-		}
 		// A new build was already written over the parked one, so only a folder link removes an old build.
 		if (old?.kind === "build" && link.kind !== "build") await this.remove(old);
 		else if (old?.enabled) await this.setEnabled(old, false);
@@ -453,6 +475,7 @@ export default class LocalPluginLinker extends Plugin {
 			new Notice(`Switched ${this.displayName(build.id)} to the build of ${refLabel(link)}.`);
 			return;
 		}
+		if (!(await this.mayReplace(link))) return;
 		await writeBuild(this.app.vault.adapter, this.buildPaths(build.id).parked, build.files);
 		await this.replace(link);
 	}
@@ -570,6 +593,43 @@ class SignInModal extends Modal {
 				resolve(false);
 			};
 		});
+	}
+}
+
+/** Resolves true if the person selects Replace. Closing the modal is the same as Cancel. */
+function confirm(app: App, message: string): Promise<boolean> {
+	return new Promise((resolve) => new ConfirmModal(app, message, resolve).open());
+}
+
+class ConfirmModal extends Modal {
+	private replaced = false;
+
+	constructor(
+		app: App,
+		private message: string,
+		private done: (replace: boolean) => void,
+	) {
+		super(app);
+	}
+
+	onOpen() {
+		this.setTitle("Replace the link?");
+		this.contentEl.createEl("p", { text: this.message });
+		new Setting(this.contentEl)
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+			.addButton((b) =>
+				b
+					.setButtonText("Replace")
+					.setWarning()
+					.onClick(() => {
+						this.replaced = true;
+						this.close();
+					}),
+			);
+	}
+
+	onClose() {
+		this.done(this.replaced);
 	}
 }
 

@@ -32,6 +32,8 @@ The repository must have a workflow that uploads the plugin as an artifact. An a
 
 Local Linker downloads the build and turns on the plugin. It remembers the artifact for each repository, and it uses the same artifact the next time.
 
+Each plugin has one entry in Linked plugins. If you install a build for a plugin that has a folder link, Local Linker asks before it replaces the link. It also asks before a folder link replaces a build. A build that replaces another build of the same plugin does not ask.
+
 To get a newer build of the same pull request or branch, select the download button in Linked plugins. The command Update GitHub builds does this for each build.
 
 ### Set up the workflow
