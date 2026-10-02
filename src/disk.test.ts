@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collapseHome, expandHome, githubRemotes, isPluginFolder, linkIn, linkOut, readPluginId, suggestFolders } from "./disk";
+import { collapseHome, copyData, expandHome, githubRemotes, isPluginFolder, linkIn, linkOut, readPluginId, suggestFolders } from "./disk";
 
 let root: string;
 let source: string;
@@ -121,6 +121,39 @@ describe("linkIn", () => {
 		expect(fs.lstatSync(target).isSymbolicLink()).toBe(false);
 		expect(read(target)).toBe("installed");
 		expect(read(stash)).toBe("stashed");
+	});
+});
+
+describe("copyData", () => {
+	it("copies the installed data.json into a source that has none", () => {
+		installed();
+		fs.writeFileSync(path.join(target, "data.json"), "settings");
+		linkIn("orca", source, target, stash);
+		expect(fs.readFileSync(path.join(source, "data.json"), "utf8")).toBe("settings");
+		expect(fs.readFileSync(path.join(stash, "data.json"), "utf8")).toBe("settings");
+	});
+
+	it("copies the data.json of a linked folder through its symlink", () => {
+		const other = path.join(root, "other");
+		fs.mkdirSync(other);
+		fs.writeFileSync(path.join(other, "data.json"), "other settings");
+		linkIn("orca", other, target, stash);
+		copyData(target, source);
+		expect(fs.readFileSync(path.join(source, "data.json"), "utf8")).toBe("other settings");
+	});
+
+	it("keeps a data.json that is already there", () => {
+		installed();
+		fs.writeFileSync(path.join(target, "data.json"), "settings");
+		fs.writeFileSync(path.join(source, "data.json"), "source settings");
+		linkIn("orca", source, target, stash);
+		expect(fs.readFileSync(path.join(source, "data.json"), "utf8")).toBe("source settings");
+	});
+
+	it("does nothing without a data.json", () => {
+		installed();
+		copyData(target, source);
+		expect(fs.existsSync(path.join(source, "data.json"))).toBe(false);
 	});
 });
 

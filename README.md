@@ -122,7 +122,7 @@ The list shows each repository that you added.
 
 You can link a folder or install a build for a plugin that is already in your vault. In that case, Local Linker moves the installed plugin folder to `.obsidian/plugins/local-plugin-linker/stash/`. Then it puts the symlink or the build where the plugin was. When you turn off or remove the link, Local Linker moves the installed version back.
 
-A build that you turned off waits in `.obsidian/plugins/local-plugin-linker/builds/`. If you install a build over an installed version, Local Linker copies its `data.json` into the build. The plugin then keeps its settings. The installed version keeps its own copy.
+A build that you turned off waits in `.obsidian/plugins/local-plugin-linker/builds/`. When you link a folder or install a build, Local Linker copies the `data.json` of the version that it replaces into the folder or the build. The plugin then keeps its settings. Local Linker does not replace a `data.json` that the folder or the build already has. The installed version keeps its own copy.
 
 Local Linker deletes only a symlink that it made and a build that it downloaded. It never deletes your folder or an installed version.
 
