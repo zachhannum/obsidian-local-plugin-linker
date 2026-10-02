@@ -31,7 +31,7 @@ import {
 	requestDeviceCode,
 	waitForToken,
 } from "./github";
-import { buildIn, BuildPaths, buildOut, writeBuild } from "./install";
+import { buildIn, BuildPaths, buildOut, copyData, writeBuild } from "./install";
 import { RepoSuggest } from "./repo-suggest";
 
 type Desktop = typeof import("./desktop");
@@ -315,12 +315,20 @@ export default class LocalPluginLinker extends Plugin {
 	/** Puts `link` in the list in place of any link for the same plugin, then turns it on. */
 	private async replace(link: Link) {
 		const old = this.settings.links.find((l) => l.id === link.id);
+		await this.copyData(link);
 		// A new build was already written over the parked one, so only a folder link removes an old build.
 		if (old?.kind === "build" && link.kind !== "build") await this.remove(old);
 		else if (old?.enabled) await this.setEnabled(old, false);
 		this.settings.links = this.settings.links.filter((l) => l.id !== link.id);
 		this.settings.links.push(link);
 		await this.setEnabled(link, true);
+	}
+
+	/** Copies the settings of the version in the plugins folder to a link that has none, so the plugin keeps its settings. */
+	private async copyData(link: Link) {
+		const target = `${this.pluginsDir()}/${link.id}`;
+		if (link.kind === "build") await copyData(this.app.vault.adapter, target, this.buildPaths(link.id).parked);
+		else this.requireDesktop().copyData(this.onDisk(target), link.source);
 	}
 
 	/** Swaps the link in or out. The plugin stays on or off as it was, except a link turned on is always on. */

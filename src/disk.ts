@@ -28,8 +28,8 @@ export function readPluginId(folder: string): string {
 }
 
 /**
- * Puts a symlink to `source` at `target`. A real folder at `target` moves to `stash` and is never deleted.
- * It throws, with nothing changed, if `stash` is already taken.
+ * Puts a symlink to `source` at `target`. A real folder at `target` moves to `stash` and is never deleted,
+ * and its data.json is copied into a source that has none. It throws, with nothing changed, if `stash` is already taken.
  */
 export function linkIn(id: string, source: string, target: string, stash: string) {
 	const existing = lstatOrNull(target);
@@ -38,10 +38,18 @@ export function linkIn(id: string, source: string, target: string, stash: string
 		if (fs.existsSync(stash)) throw new Error(`Cannot turn on the link. A backup of ${id} already exists in ${stash}.`);
 		fs.mkdirSync(path.dirname(stash), { recursive: true });
 		fs.renameSync(target, stash);
+		copyData(stash, source);
 	}
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	// A junction needs no admin rights on Windows. Other systems ignore the type.
 	fs.symlinkSync(source, target, "junction");
+}
+
+/** Copies the data.json in `from` into `to`. A data.json that `to` already has stays. */
+export function copyData(from: string, to: string) {
+	const data = path.join(from, "data.json");
+	const copy = path.join(to, "data.json");
+	if (fs.existsSync(data) && !fs.existsSync(copy)) fs.copyFileSync(data, copy);
 }
 
 /** Removes a symlink at `target` and moves `stash` back. A real folder at `target` stays, and so does `stash`. */

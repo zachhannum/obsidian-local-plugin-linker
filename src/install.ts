@@ -43,13 +43,18 @@ export async function buildIn(files: Files, id: string, paths: BuildPaths) {
 		if (await files.exists(stash)) throw new Error(`Cannot turn on the build. A backup of ${id} already exists in ${stash}.`);
 		await mkdirs(files, parent(stash));
 		await files.rename(target, stash);
-		const data = `${stash}/data.json`;
-		if ((await files.exists(data)) && !(await files.exists(`${parked}/data.json`))) {
-			await files.writeBinary(`${parked}/data.json`, await files.readBinary(data));
-		}
+		await copyData(files, stash, parked);
 	}
 	await mkdirs(files, parent(target));
 	await files.rename(parked, target);
+}
+
+/** Copies the data.json in `from` into `to`. A data.json that `to` already has stays. */
+export async function copyData(files: Files, from: string, to: string) {
+	const data = `${from}/data.json`;
+	if (!(await files.exists(data)) || (await files.exists(`${to}/data.json`))) return;
+	await mkdirs(files, to);
+	await files.writeBinary(`${to}/data.json`, await files.readBinary(data));
 }
 
 /** Parks the build that sits at `target`, then moves `stash` back. It throws, with nothing changed, if a parked build is in the way. */

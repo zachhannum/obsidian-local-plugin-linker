@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { expandHome } from "./disk";
 
-export { collapseHome, githubRemotes, linkIn, linkOut, readPluginId } from "./disk";
+export { collapseHome, copyData, githubRemotes, linkIn, linkOut, readPluginId } from "./disk";
 export { FolderSuggest } from "./folder-suggest";
 
 /** The absolute path of a typed folder, with a leading tilde expanded. */

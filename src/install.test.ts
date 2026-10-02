@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildIn, BuildPaths, buildOut, Files, writeBuild } from "./install";
+import { buildIn, BuildPaths, buildOut, copyData, Files, writeBuild } from "./install";
 
 /** An in-memory vault. A folder exists when it was made or when a file sits under it. */
 class MemoryFiles implements Files {
@@ -138,6 +138,28 @@ describe("buildIn", () => {
 		installed();
 		await expect(buildIn(files, "orca", paths)).rejects.toThrow("The build for orca is missing. Install it again.");
 		expect(files.text(`${paths.target}/main.js`)).toBe("installed");
+	});
+});
+
+describe("copyData", () => {
+	it("copies the data.json into a folder that has none", async () => {
+		files.put(`${paths.target}/data.json`, "settings");
+		await copyData(files, paths.target, paths.parked);
+		expect(files.text(`${paths.parked}/data.json`)).toBe("settings");
+		expect(files.text(`${paths.target}/data.json`)).toBe("settings");
+	});
+
+	it("keeps a data.json that is already there", async () => {
+		files.put(`${paths.target}/data.json`, "settings");
+		files.put(`${paths.parked}/data.json`, "build settings");
+		await copyData(files, paths.target, paths.parked);
+		expect(files.text(`${paths.parked}/data.json`)).toBe("build settings");
+	});
+
+	it("does nothing without a data.json", async () => {
+		files.put(`${paths.target}/main.js`, "installed");
+		await copyData(files, paths.target, paths.parked);
+		expect(await files.exists(paths.parked)).toBe(false);
 	});
 });
 
